@@ -1,17 +1,18 @@
 import { TEAMS } from './teams';
+import { staticDefense } from './ratings';
 import { TEAM_PROPS, type PropCandidate, type PropMarket } from '@/data/props';
 import { americanToProb, confidenceScore, normalCdf } from './odds';
-import type { BookLine, Game, PlayerProp, TeamAbbr } from './types';
+import type { BookLine, Game, LivePropMap, PlayerProp, TeamAbbr } from './types';
 
 /**
  * ============================================================================
  *  PLAYER PROP MODEL
  * ============================================================================
- *  Projects every candidate in a game from the LIVE game environment — the
- *  implied team total and game script derived from the current DraftKings
- *  spread/total — then picks the single best Over OR Under across the whole
- *  field by model edge. When a live prop feed is connected the real posted
- *  line and prices replace the neutral baselines.
+ *  Projects every candidate in a game from the simulated game environment —
+ *  each team's simulated points (implied total), game script (margin), and the
+ *  opponent's defensive strength — then picks the single best Over OR Under
+ *  across the whole field by model edge. When a live prop feed is connected the
+ *  real posted line and prices replace the neutral baselines.
  * ============================================================================
  */
 
@@ -23,15 +24,6 @@ const MARKET_SIGMA: Record<PropMarket, number> = {
   Sacks: 0.85,
 };
 
-/** A live posted line for a player market: key = `${playerLower}|${market}`. */
-export interface LivePropLine {
-  line: number;
-  overPrice: number;
-  underPrice: number;
-  book: 'DraftKings' | 'FanDuel';
-}
-export type LivePropMap = Record<string, LivePropLine>;
-
 export function propKey(player: string, market: PropMarket): string {
   return `${player.toLowerCase()}|${market}`;
 }
@@ -40,28 +32,30 @@ interface Env {
   teamMargin: number; // expected margin for the player's team (+ = favored)
   total: number; // game total
   teamImplied: number; // implied points for the player's team
+  oppDefense: number; // opponent defensive rating (points; + = stingier)
 }
 
-/** Project a candidate's stat line from the game environment. */
+/** Project a candidate's stat line from the game environment + matchup. */
 export function projectProp(c: PropCandidate, env: Env): number {
   const tf = env.total / 45; // pace/scoring factor
   const m = env.teamMargin;
+  const d = env.oppDefense; // opponent stinginess (points above avg)
   let proj: number;
   switch (c.market) {
-    // Trailing teams throw more; scoring environment lifts volume.
+    // Trailing teams throw more; scoring lifts volume; tough pass D suppresses.
     case 'Pass Yards':
-      proj = c.baseline * (0.82 + 0.18 * tf) * (1 - 0.004 * m);
+      proj = c.baseline * (0.82 + 0.18 * tf) * (1 - 0.004 * m) * (1 - 0.02 * d);
       break;
     // Favorites run more (positive script, clock control).
     case 'Rush Yards':
-      proj = c.baseline * (0.9 + 0.1 * tf) * (1 + 0.011 * m);
+      proj = c.baseline * (0.9 + 0.1 * tf) * (1 + 0.011 * m) * (1 - 0.012 * d);
       break;
     // Volume up in shootouts; slight lift when trailing (garbage-time targets).
     case 'Receiving Yards':
-      proj = c.baseline * (0.82 + 0.18 * tf) * (1 - 0.003 * m);
+      proj = c.baseline * (0.82 + 0.18 * tf) * (1 - 0.003 * m) * (1 - 0.02 * d);
       break;
     case 'Receptions':
-      proj = c.baseline * (0.9 + 0.1 * tf) * (1 - 0.002 * m);
+      proj = c.baseline * (0.9 + 0.1 * tf) * (1 - 0.002 * m) * (1 - 0.012 * d);
       break;
     // Pass rush eats when the opponent is trailing and must drop back.
     case 'Sacks':
@@ -141,25 +135,53 @@ function consensus(books: BookLine[]) {
   };
 }
 
+/** Simulated environment passed from the game engine to anchor prop projections. */
+export interface PropSimEnv {
+  projHome: number;
+  projAway: number;
+  marginMean: number;
+  totalMean: number;
+}
+
 /** Pick the single best prop (Over or Under) across both teams for a game. */
-export function bestProp(game: Game, live?: LivePropMap): PlayerProp {
-  const { spread, total } = consensus(game.books);
-  const homeMargin = -spread; // + = home favored
+export function bestProp(game: Game, live?: LivePropMap, sim?: PropSimEnv): PlayerProp {
   const candidates: EvaluatedProp[] = [];
 
-  for (const [team, margin] of [
-    [game.home, homeMargin],
-    [game.away, -homeMargin],
-  ] as [TeamAbbr, number][]) {
-    const teamImplied = (total + margin) / 2;
-    const env: Env = { teamMargin: margin, total, teamImplied };
+  let homeImplied: number;
+  let awayImplied: number;
+  let homeMargin: number;
+  let total: number;
+  if (sim) {
+    homeImplied = sim.projHome;
+    awayImplied = sim.projAway;
+    homeMargin = sim.marginMean;
+    total = sim.totalMean;
+  } else {
+    const con = consensus(game.books);
+    homeMargin = -con.spread;
+    total = con.total;
+    homeImplied = (total + homeMargin) / 2;
+    awayImplied = (total - homeMargin) / 2;
+  }
+
+  const perTeam: [TeamAbbr, number, number, TeamAbbr][] = [
+    [game.home, homeMargin, homeImplied, game.away],
+    [game.away, -homeMargin, awayImplied, game.home],
+  ];
+
+  for (const [team, margin, implied, opp] of perTeam) {
+    const env: Env = {
+      teamMargin: margin,
+      total,
+      teamImplied: implied,
+      oppDefense: staticDefense(opp),
+    };
     for (const c of TEAM_PROPS[team] ?? []) {
       candidates.push(evaluate(c, team, env, live));
     }
   }
 
   if (!candidates.length) {
-    // Safety fallback — should not happen with a populated pool.
     return {
       player: `${TEAMS[game.home].name} skill`,
       team: game.home,
@@ -174,7 +196,6 @@ export function bestProp(game: Game, live?: LivePropMap): PlayerProp {
     };
   }
 
-  // Rank by conviction: confidence first, then absolute standardized edge.
   candidates.sort((a, b) => b.prop.confidence - a.prop.confidence || Math.abs(b.z) - Math.abs(a.z));
   return candidates[0].prop;
 }

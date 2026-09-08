@@ -114,6 +114,18 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
         ))}
       </div>
 
+      {/* Simulation projection */}
+      <div className="flex items-center justify-between border-y border-[var(--color-border)] bg-[var(--color-surface)]/40 px-4 py-2 text-xs">
+        <span className="tracking-widest text-zinc-500 uppercase">Sim Projection</span>
+        <span className="mono text-zinc-300">
+          {away.abbr} {a.projAway.toFixed(1)} — {home.abbr} {a.projHome.toFixed(1)}
+        </span>
+        <span className="mono text-zinc-500">
+          {Math.round(Math.max(a.homeWinProb, 1 - a.homeWinProb) * 100)}% win ·{' '}
+          {(a.sim.n / 1000).toFixed(0)}k sims
+        </span>
+      </div>
+
       {/* Model picks */}
       <div className="space-y-2 px-4 pb-3">
         <PickRow label="Model · Spread" pick={a.spread} matchup={matchup} week={game.week} />
@@ -162,23 +174,25 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-bold text-white">
-              {game.prop.player} · {game.prop.side} {game.prop.line} {game.prop.market}
+              {a.propDetail.player} · {a.propDetail.side} {a.propDetail.line} {a.propDetail.market}
             </div>
-            <div className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{game.prop.rationale}</div>
+            <div className="mt-0.5 line-clamp-2 text-xs text-zinc-500">
+              {a.propDetail.rationale}
+            </div>
             <div className="mt-1.5 max-w-[240px]">
-              <ConfidenceBar value={game.prop.confidence} />
+              <ConfidenceBar value={a.propDetail.confidence} />
             </div>
           </div>
           <div className="flex items-center gap-2">
             <span className="mono text-xs text-zinc-400">
-              proj {game.prop.projection} / {formatOdds(game.prop.price)}
+              proj {a.propDetail.projection} / {formatOdds(a.propDetail.price)}
             </span>
             <PlaceBetButton
-              description={`${game.prop.player} ${game.prop.side} ${game.prop.line} ${game.prop.market} (${matchup})`}
+              description={`${a.propDetail.player} ${a.propDetail.side} ${a.propDetail.line} ${a.propDetail.market} (${matchup})`}
               market={`Week ${game.week} · Prop`}
-              price={game.prop.price}
+              price={a.propDetail.price}
               stakeUnits={Number(a.prop.units.toFixed(2)) || 0.5}
-              confidence={game.prop.confidence}
+              confidence={a.propDetail.confidence}
               source="model"
             />
           </div>

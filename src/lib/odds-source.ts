@@ -2,9 +2,9 @@ import { WEEK1_GAMES } from '@/data/games';
 import { TEAMS } from '@/lib/teams';
 import { getCurrentWeek } from '@/lib/schedule';
 import { fetchEspnWeek } from '@/lib/espn';
-import { bestProp, propKey, type LivePropMap } from '@/lib/props';
+import { bestProp, propKey } from '@/lib/props';
 import type { PropMarket } from '@/data/props';
-import type { BookLine, Game, TeamAbbr } from '@/lib/types';
+import type { BookLine, Game, LivePropMap, TeamAbbr } from '@/lib/types';
 
 /**
  * Source of truth for game lines. Primary feed is ESPN (free, no key): real
@@ -204,7 +204,7 @@ async function overlayLiveProps(games: Game[], key: string): Promise<Game[]> {
         if (!res.ok) return g;
         const data = (await res.json()) as OddsApiEventOdds;
         const map = buildPropMap(data);
-        return Object.keys(map).length ? { ...g, prop: bestProp(g, map) } : g;
+        return Object.keys(map).length ? { ...g, livePropLines: map, prop: bestProp(g, map) } : g;
       }),
     );
   } catch {

@@ -83,6 +83,15 @@ export interface PlayerProp {
   rationale: string;
 }
 
+export interface LivePropLine {
+  line: number;
+  overPrice: number;
+  underPrice: number;
+  book: 'DraftKings' | 'FanDuel';
+}
+/** Live posted prop lines, keyed by `${playerLower}|${market}`. */
+export type LivePropMap = Record<string, LivePropLine>;
+
 export interface Game {
   id: string;
   week: number;
@@ -99,6 +108,8 @@ export interface Game {
   statusDetail?: string;
   homeScore?: number;
   awayScore?: number;
+  /** Live posted prop lines when a prop feed is connected (transient). */
+  livePropLines?: LivePropMap;
 }
 
 export interface GameContext {

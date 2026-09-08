@@ -1,6 +1,7 @@
 import { BrainCircuit } from 'lucide-react';
 import { SectionTitle, Chip } from '@/components/atoms';
-import { MODEL_CONFIG } from '@/lib/model';
+import { SIM_CONFIG } from '@/lib/simulation';
+import { MODEL_WEIGHT } from '@/lib/model';
 
 export const metadata = { title: 'The Model · LockyLines' };
 
@@ -36,25 +37,29 @@ const KEN_MODELS = [
 ];
 
 const FACTORS = [
-  ['Power Rating Edge', 'Neutral-field team strength differential on a points scale.'],
-  ['Home Field', `${MODEL_CONFIG.homeFieldAdvantage} pts to the host (0 at neutral sites).`],
   [
-    'Rest Differential',
-    `${MODEL_CONFIG.restPointPerDay} pts per day of rest edge, capped at ±${MODEL_CONFIG.restCap}.`,
+    'Off/Def Matchup',
+    'Each team\u2019s offense vs the opponent\u2019s defense, in points — sets expected scoring.',
   ],
-  ['QB Availability', `±${MODEL_CONFIG.qbOutSwing} pt swing when a starting QB is ruled out.`],
+  ['Home Field', 'Team-specific edge (altitude, crowd, dome): Denver/Seattle ~2.5, others ~1.8.'],
   [
-    'Division Dampener',
-    `Rivalry familiarity tightens the margin by ${((1 - MODEL_CONFIG.divisionDampener) * 100).toFixed(0)}%.`,
+    'Rest & Bye',
+    `${SIM_CONFIG.restPtPerDay} pts per day of rest edge, capped at ±${SIM_CONFIG.restCap}.`,
   ],
-  ['Pass-D Regression', 'Ken\u2019s least-sticky-unit signal nudges the season expectation.'],
+  [
+    'Travel & Body Clock',
+    'Haversine trip distance + timezone shift; penalizes West teams in early ET kicks.',
+  ],
+  ['Weather', 'Wind/rain/snow/cold suppress scoring; dome nudges up.'],
+  ['QB Availability', `±${SIM_CONFIG.qbOutSwing} pts when a starting QB is ruled out.`],
+  ['Pass-D Regression', 'Ken\u2019s least-sticky-unit signal is baked into the team ratings.'],
   [
     'In-Season Learning',
-    'After every completed game, an Elo-style margin update adjusts each team\u2019s power rating from real results.',
+    'Elo-style margin updates adjust each team\u2019s rating from real results, weekly.',
   ],
   [
-    'Market Anchor',
-    `${(MODEL_CONFIG.marketBlend * 100).toFixed(0)}% weight to the vig-free DraftKings line so we never stray absurdly from an efficient price.`,
+    'Market Blend',
+    `${Math.round(MODEL_WEIGHT * 100)}% model / ${Math.round((1 - MODEL_WEIGHT) * 100)}% vig-free market when sizing stakes.`,
   ],
 ];
 
@@ -70,13 +75,14 @@ export default function MethodologyPage() {
       <section className="card p-6">
         <h3 className="text-base font-bold text-white">The weighted confidence engine</h3>
         <p className="mt-2 text-sm text-zinc-400">
-          Every game pick is built from an explainable stack of factors — not a black box. We
-          project a point margin, convert it to a win/cover probability with an NFL-calibrated
-          normal curve (σ = {MODEL_CONFIG.sigma}), then blend it with the market&rsquo;s vig-removed
-          price. Edge is{' '}
-          <span className="text-emerald-400">model probability − market probability</span>, and
-          stakes are sized with quarter-Kelly, hard-capped at 1 unit — you never risk more than a
-          single unit on any bet.
+          Every game runs through a <span className="text-white">Monte-Carlo simulation</span>: the
+          factors below build each team&rsquo;s expected points, then the game is played out{' '}
+          {(SIM_CONFIG.n / 1000).toFixed(0)},000 times as a pair of correlated scoring outcomes.
+          Spread (push-aware on key numbers), moneyline, total and team totals are all read off the
+          same simulated distribution, so they stay internally consistent. Edge is{' '}
+          <span className="text-emerald-400">model probability − market probability</span>; stakes
+          blend {Math.round(MODEL_WEIGHT * 100)}% model with the vig-free price and are sized with
+          fractional Kelly, hard-capped at 1 unit.
         </p>
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           {FACTORS.map(([label, detail]) => (
@@ -90,10 +96,10 @@ export default function MethodologyPage() {
           ))}
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Chip>Vig removed</Chip>
-          <Chip>Quarter-Kelly sizing</Chip>
-          <Chip>Normal-curve win prob</Chip>
-          <Chip>Line-shopped best price</Chip>
+          <Chip>{(SIM_CONFIG.n / 1000).toFixed(0)}k Monte-Carlo sims</Chip>
+          <Chip>Push-aware key numbers</Chip>
+          <Chip>Correlated team scores</Chip>
+          <Chip>Vig removed · line-shopped</Chip>
         </div>
       </section>
 

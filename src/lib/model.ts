@@ -1,62 +1,28 @@
-import type { BookLine, Game, ModelFactor, ModelPick, TeamAbbr } from './types';
+import type { BookLine, Game, ModelFactor, ModelPick, PlayerProp } from './types';
 import { TEAMS } from './teams';
-import {
-  americanToProb,
-  confidenceScore,
-  coverProb,
-  kellyUnits,
-  marginToWinProb,
-  noVigProb,
-} from './odds';
+import { americanToProb, confidenceScore, kellyUnits, noVigProb } from './odds';
+import { bestProp } from './props';
+import { homeCoverProb, overProb, simulateGame, type GameSim } from './simulation';
+import type { Ratings } from './form';
 
 /**
- * ============================================================================
- *  THE MODEL — a transparent, weighted NFL betting engine.
- * ============================================================================
- *  Every pick is built from an explainable stack of factors rather than a
- *  black box. The engine blends a power-rating projection with the market's
- *  vig-free price, then sizes stakes with fractional Kelly.
- *
- *  Factor stack (game sides & totals):
- *   1. Power rating differential (neutral field)
- *   2. Home-field advantage
- *   3. Rest / bye differential
- *   4. Quarterback availability (injury)
- *   5. Divisional familiarity dampener
- *   6. Ken Barkley pass-defense regression signal (season level)
- *   7. Market anchor (vig-removed consensus) — regression to the market
- *
- *  The model projection and the market are blended so we never stray absurdly
- *  from an efficient market, but we still express a real edge when factors
- *  disagree with the price.
- * ============================================================================
+ * The model layer. Every game is run through the Monte-Carlo simulation engine
+ * (see simulation.ts); spread, moneyline and total picks are read off the same
+ * simulated score distribution, then blended with the vig-free market price for
+ * staking. Stakes use fractional Kelly, hard-capped at 1 unit.
  */
 
-export const MODEL_CONFIG = {
-  homeFieldAdvantage: 1.7,
-  restPointPerDay: 0.12,
-  restCap: 2.0,
-  qbOutSwing: 6.5,
-  divisionDampener: 0.85,
-  marketBlend: 0.45, // weight given to the market projection vs. our model
-  sigma: 13.2,
-  totalBase: 44.5,
-};
+export const MODEL_WEIGHT = 0.55; // weight on the model vs. the market when blending
 
 function consensus(books: BookLine[]) {
-  const n = books.length;
-  const avg = (fn: (b: BookLine) => number) => books.reduce((s, b) => s + fn(b), 0) / n;
+  const n = books.length || 1;
   return {
-    spread: avg((b) => b.spread),
-    total: avg((b) => b.total),
+    spread: books.reduce((s, b) => s + b.spread, 0) / n,
+    total: books.reduce((s, b) => s + b.total, 0) / n,
   };
 }
 
-/** Best available price for a side across books. */
-function bestPrice<T extends BookLine>(
-  books: T[],
-  pick: (b: T) => number,
-): { book: T['book']; price: number } {
+function bestPrice<T extends BookLine>(books: T[], pick: (b: T) => number) {
   let best = books[0];
   for (const b of books) if (pick(b) > pick(best)) best = b;
   return { book: best.book, price: pick(best) };
@@ -64,180 +30,71 @@ function bestPrice<T extends BookLine>(
 
 export interface GameAnalysis {
   game: Game;
-  projectedMargin: number; // home perspective
+  sim: GameSim;
+  projectedMargin: number;
   projectedTotal: number;
+  projHome: number;
+  projAway: number;
+  homeWinProb: number;
   factors: ModelFactor[];
   spread: ModelPick;
   moneyline: ModelPick;
   total: ModelPick;
   prop: ModelPick;
+  propDetail: PlayerProp;
   upset?: ModelPick;
   topPick: ModelPick;
 }
 
-export function analyzeGame(game: Game, ratings?: Record<TeamAbbr, number>): GameAnalysis {
-  const home = TEAMS[game.home];
-  const away = TEAMS[game.away];
-  const c = game.context;
-  const factors: ModelFactor[] = [];
-
-  const homeRating = ratings?.[game.home] ?? home.rating;
-  const awayRating = ratings?.[game.away] ?? away.rating;
-
-  // 1. Power rating differential (in-season adjusted when results are in).
-  let margin = homeRating - awayRating;
-  factors.push({
-    label: 'Power Rating Edge',
-    detail: `${home.name} ${homeRating.toFixed(1)} vs ${away.name} ${awayRating.toFixed(1)}`,
-    impact: homeRating - awayRating,
-  });
-
-  // 2. Home-field advantage.
-  const hfa = c.neutralSite ? 0 : MODEL_CONFIG.homeFieldAdvantage;
-  margin += hfa;
-  if (hfa) factors.push({ label: 'Home Field', detail: `${home.name} at home`, impact: hfa });
-
-  // 3. Rest / bye differential.
-  const restDiff = Math.max(
-    -MODEL_CONFIG.restCap,
-    Math.min(
-      MODEL_CONFIG.restCap,
-      (c.homeRestDays - c.awayRestDays) * MODEL_CONFIG.restPointPerDay,
-    ),
-  );
-  if (Math.abs(restDiff) >= 0.1) {
-    margin += restDiff;
-    factors.push({
-      label: 'Rest Differential',
-      detail: `${c.homeRestDays}d vs ${c.awayRestDays}d`,
-      impact: restDiff,
-    });
-  }
-
-  // 4. Quarterback availability.
-  if (c.homeQbOut) {
-    margin -= MODEL_CONFIG.qbOutSwing;
-    factors.push({
-      label: 'QB Out (Home)',
-      detail: `${home.name} starter unavailable`,
-      impact: -MODEL_CONFIG.qbOutSwing,
-    });
-  }
-  if (c.awayQbOut) {
-    margin += MODEL_CONFIG.qbOutSwing;
-    factors.push({
-      label: 'QB Out (Away)',
-      detail: `${away.name} starter unavailable`,
-      impact: MODEL_CONFIG.qbOutSwing,
-    });
-  }
-
-  // 5. Divisional dampener (rivals play closer than raw ratings suggest).
-  if (c.divisionGame) {
-    const before = margin;
-    margin *= MODEL_CONFIG.divisionDampener;
-    factors.push({
-      label: 'Division Game',
-      detail: 'Familiarity tightens the margin',
-      impact: margin - before,
-    });
-  }
-
-  // 6. Ken Barkley pass-defense regression signal (points nudge on season expectation).
-  const passRegress =
-    passDefenseSignal(home.passDefRankPrev) - passDefenseSignal(away.passDefRankPrev);
-  if (Math.abs(passRegress) >= 0.15) {
-    margin += passRegress;
-    factors.push({
-      label: 'Pass-D Regression (Ken)',
-      detail: 'Prior-year pass defense is the least sticky unit — mean reversion applied',
-      impact: passRegress,
-    });
-  }
-
-  const modelMargin = margin;
-
-  // 7. Blend with the market (vig-removed) so we regress toward an efficient price.
+export function analyzeGame(game: Game, ratings?: Ratings): GameAnalysis {
+  const sim = simulateGame(game, ratings);
   const con = consensus(game.books);
-  const marketMargin = -con.spread; // home margin implied by the spread
-  const blended =
-    modelMargin * (1 - MODEL_CONFIG.marketBlend) + marketMargin * MODEL_CONFIG.marketBlend;
 
-  // ---- SPREAD PICK ----
-  const spreadPick = buildSpreadPick(game, blended);
+  const spread = buildSpreadPick(game, sim, con.spread);
+  const moneyline = buildMoneylinePick(game, sim);
+  const total = buildTotalPick(game, sim, con.total);
 
-  // ---- MONEYLINE PICK ----
-  const moneylinePick = buildMoneylinePick(game, blended);
+  const propDetail = bestProp(game, game.livePropLines, {
+    projHome: sim.projHome,
+    projAway: sim.projAway,
+    marginMean: sim.marginMean,
+    totalMean: sim.totalMean,
+  });
+  const prop = buildPropPick(game, propDetail);
 
-  // ---- TOTAL PICK ----
-  const projectedTotal = projectTotal(game);
-  const totalPick = buildTotalPick(game, projectedTotal, con.total);
+  const upset = detectUpset(game, sim, con.spread);
 
-  // ---- PROP PICK ----
-  const propPick = buildPropPick(game);
-
-  // ---- UNDERDOG UPSET DETECTION ----
-  let upset: ModelPick | undefined;
-  const homeWinProb = marginToWinProb(blended, MODEL_CONFIG.sigma);
-  const dogIsHome = con.spread > 0;
-  const dogWinProb = dogIsHome ? homeWinProb : 1 - homeWinProb;
-  const dogMlRaw = dogIsHome
-    ? bestPrice(game.books, (b) => b.moneylineHome)
-    : bestPrice(game.books, (b) => b.moneylineAway);
-  const dogMarketProb = noVigProb(
-    dogIsHome ? game.books[0].moneylineHome : game.books[0].moneylineAway,
-    dogIsHome ? game.books[0].moneylineAway : game.books[0].moneylineHome,
-  );
-  if (dogMlRaw.price > 0 && dogWinProb - dogMarketProb > 0.05 && dogWinProb > 0.4) {
-    const edge = dogWinProb - dogMarketProb;
-    upset = {
-      gameId: game.id,
-      type: 'Moneyline',
-      selection: `${dogIsHome ? home.name : away.name} ML (upset)`,
-      side: dogIsHome ? 'home_ml' : 'away_ml',
-      book: dogMlRaw.book,
-      price: dogMlRaw.price,
-      line: 0,
-      marketProb: dogMarketProb,
-      modelProb: dogWinProb,
-      edge,
-      confidence: confidenceScore(dogWinProb, edge),
-      units: kellyUnits(dogWinProb, dogMlRaw.price),
-      isUnderdogUpset: true,
-      factors,
-    };
-  }
-
-  const candidates = [spreadPick, moneylinePick, totalPick, propPick];
+  const candidates = [spread, moneyline, total, prop];
   const topPick = candidates.reduce((a, b) => (b.confidence > a.confidence ? b : a));
 
   return {
     game,
-    projectedMargin: blended,
-    projectedTotal,
-    factors,
-    spread: spreadPick,
-    moneyline: moneylinePick,
-    total: totalPick,
-    prop: propPick,
+    sim,
+    projectedMargin: sim.marginMean,
+    projectedTotal: sim.totalMean,
+    projHome: sim.projHome,
+    projAway: sim.projAway,
+    homeWinProb: sim.homeWinProb,
+    factors: sim.factors,
+    spread,
+    moneyline,
+    total,
+    prop,
+    propDetail,
     upset,
     topPick,
   };
 }
 
-/** Convert a prior-year pass-defense rank into a season-level points nudge. */
-function passDefenseSignal(rank: number): number {
-  // Rank 32 (worst) regresses UP (positive for the team's future). Rank 1 regresses DOWN.
-  // Centered at 16.5, scaled to ±~1.2 points.
-  return ((rank - 16.5) / 15.5) * 1.2;
+function blendUnits(modelProb: number, marketProb: number, price: number): number {
+  const blended = MODEL_WEIGHT * modelProb + (1 - MODEL_WEIGHT) * marketProb;
+  return kellyUnits(blended, price);
 }
 
-function buildSpreadPick(game: Game, projectedMargin: number): ModelPick {
+function buildSpreadPick(game: Game, sim: GameSim, conSpread: number): ModelPick {
   const home = TEAMS[game.home];
   const away = TEAMS[game.away];
-  // Home covers if margin > -homeSpread. Compare each book's home spread.
-  const con = consensus(game.books);
-  const homeCover = coverProb(projectedMargin, con.spread, MODEL_CONFIG.sigma);
+  const homeCover = homeCoverProb(sim, conSpread);
   const takeHome = homeCover >= 0.5;
   const prob = takeHome ? homeCover : 1 - homeCover;
   const priced = takeHome
@@ -247,13 +104,12 @@ function buildSpreadPick(game: Game, projectedMargin: number): ModelPick {
     takeHome ? game.books[0].spreadPriceHome : game.books[0].spreadPriceAway,
     takeHome ? game.books[0].spreadPriceAway : game.books[0].spreadPriceHome,
   );
-  const line = takeHome ? con.spread : -con.spread;
-  const team = takeHome ? home.name : away.name;
+  const line = takeHome ? conSpread : -conSpread;
   const edge = prob - marketProb;
   return {
     gameId: game.id,
     type: 'Spread',
-    selection: `${team} ${line > 0 ? '+' : ''}${line.toFixed(1)}`,
+    selection: `${takeHome ? home.name : away.name} ${line > 0 ? '+' : ''}${line.toFixed(1)}`,
     side: takeHome ? 'home_spread' : 'away_spread',
     book: priced.book,
     price: priced.price,
@@ -262,17 +118,16 @@ function buildSpreadPick(game: Game, projectedMargin: number): ModelPick {
     modelProb: prob,
     edge,
     confidence: confidenceScore(prob, edge),
-    units: kellyUnits(prob, priced.price),
-    factors: [],
+    units: blendUnits(prob, marketProb, priced.price),
+    factors: sim.factors,
   };
 }
 
-function buildMoneylinePick(game: Game, projectedMargin: number): ModelPick {
+function buildMoneylinePick(game: Game, sim: GameSim): ModelPick {
   const home = TEAMS[game.home];
   const away = TEAMS[game.away];
-  const homeWin = marginToWinProb(projectedMargin, MODEL_CONFIG.sigma);
-  const takeHome = homeWin >= 0.5;
-  const prob = takeHome ? homeWin : 1 - homeWin;
+  const takeHome = sim.homeWinProb >= 0.5;
+  const prob = takeHome ? sim.homeWinProb : 1 - sim.homeWinProb;
   const priced = takeHome
     ? bestPrice(game.books, (b) => b.moneylineHome)
     : bestPrice(game.books, (b) => b.moneylineAway);
@@ -293,32 +148,15 @@ function buildMoneylinePick(game: Game, projectedMargin: number): ModelPick {
     modelProb: prob,
     edge,
     confidence: confidenceScore(prob, edge),
-    units: kellyUnits(prob, priced.price),
+    units: blendUnits(prob, marketProb, priced.price),
     factors: [],
   };
 }
 
-/** Light, transparent total projection (no O/D splits required). */
-export function projectTotal(game: Game): number {
-  const home = TEAMS[game.home];
-  const away = TEAMS[game.away];
-  let total = MODEL_CONFIG.totalBase;
-  // Stronger overall teams tend to have better offenses; small positive nudge.
-  total += (home.rating + away.rating) * 0.18;
-  const w = game.context.weather;
-  if (w === 'dome') total += 1.0;
-  if (w === 'wind') total -= 3.0;
-  if (w === 'rain') total -= 2.0;
-  if (w === 'snow') total -= 4.0;
-  if (w === 'cold') total -= 1.5;
-  return total;
-}
-
-function buildTotalPick(game: Game, projectedTotal: number, marketTotal: number): ModelPick {
-  const diff = projectedTotal - marketTotal;
-  const takeOver = diff >= 0;
-  // Convert points of disagreement to a probability with total sigma ~10.
-  const prob = 0.5 + Math.min(0.22, Math.abs(diff) / 10 / 2);
+function buildTotalPick(game: Game, sim: GameSim, conTotal: number): ModelPick {
+  const over = overProb(sim, conTotal);
+  const takeOver = over >= 0.5;
+  const prob = takeOver ? over : 1 - over;
   const priced = takeOver
     ? bestPrice(game.books, (b) => b.overPrice)
     : bestPrice(game.books, (b) => b.underPrice);
@@ -330,23 +168,22 @@ function buildTotalPick(game: Game, projectedTotal: number, marketTotal: number)
   return {
     gameId: game.id,
     type: 'Total',
-    selection: `${takeOver ? 'Over' : 'Under'} ${marketTotal.toFixed(1)}`,
+    selection: `${takeOver ? 'Over' : 'Under'} ${conTotal.toFixed(1)}`,
     side: takeOver ? 'over' : 'under',
     book: priced.book,
     price: priced.price,
-    line: marketTotal,
+    line: conTotal,
     marketProb,
     modelProb: prob,
     edge,
     confidence: confidenceScore(prob, edge),
-    units: kellyUnits(prob, priced.price),
+    units: blendUnits(prob, marketProb, priced.price),
     factors: [],
   };
 }
 
-function buildPropPick(game: Game): ModelPick {
-  const p = game.prop;
-  const prob = Math.max(0.5, Math.min(0.85, p.confidence / 100));
+function buildPropPick(game: Game, p: PlayerProp): ModelPick {
+  const prob = Math.max(0.5, Math.min(0.9, p.confidence / 100));
   const marketProb = americanToProb(p.price);
   const edge = prob - marketProb;
   return {
@@ -363,5 +200,37 @@ function buildPropPick(game: Game): ModelPick {
     confidence: p.confidence,
     units: kellyUnits(prob, p.price),
     factors: [{ label: 'Projection', detail: p.rationale, impact: p.projection - p.line }],
+  };
+}
+
+function detectUpset(game: Game, sim: GameSim, conSpread: number): ModelPick | undefined {
+  const dogIsHome = conSpread > 0;
+  const dogWinProb = dogIsHome ? sim.homeWinProb : 1 - sim.homeWinProb;
+  const priced = dogIsHome
+    ? bestPrice(game.books, (b) => b.moneylineHome)
+    : bestPrice(game.books, (b) => b.moneylineAway);
+  if (priced.price <= 0) return undefined;
+  const marketProb = noVigProb(
+    dogIsHome ? game.books[0].moneylineHome : game.books[0].moneylineAway,
+    dogIsHome ? game.books[0].moneylineAway : game.books[0].moneylineHome,
+  );
+  const edge = dogWinProb - marketProb;
+  if (edge <= 0.045 || dogWinProb <= 0.38) return undefined;
+  const team = dogIsHome ? TEAMS[game.home] : TEAMS[game.away];
+  return {
+    gameId: game.id,
+    type: 'Moneyline',
+    selection: `${team.name} ML (upset)`,
+    side: dogIsHome ? 'home_ml' : 'away_ml',
+    book: priced.book,
+    price: priced.price,
+    line: 0,
+    marketProb,
+    modelProb: dogWinProb,
+    edge,
+    confidence: confidenceScore(dogWinProb, edge),
+    units: blendUnits(dogWinProb, marketProb, priced.price),
+    isUnderdogUpset: true,
+    factors: sim.factors,
   };
 }
