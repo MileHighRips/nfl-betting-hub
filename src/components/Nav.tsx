@@ -9,6 +9,7 @@ import {
   Flame,
   ClipboardList,
   BrainCircuit,
+  ListChecks,
 } from 'lucide-react';
 import { useBankroll } from '@/lib/store';
 import { fmtMoney } from '@/lib/format';
@@ -17,6 +18,7 @@ import clsx from 'clsx';
 const LINKS = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/slate', label: 'Weekly Slate', icon: CalendarRange },
+  { href: '/picks', label: 'All Picks', icon: ListChecks },
   { href: '/futures', label: 'Futures', icon: Trophy },
   { href: '/value', label: 'Value Board', icon: Flame },
   { href: '/tracker', label: 'Bet Tracker', icon: ClipboardList },

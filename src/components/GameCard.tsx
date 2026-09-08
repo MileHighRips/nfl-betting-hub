@@ -93,6 +93,16 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
             <span className="chip border-red-500/40 bg-red-500/10 text-red-300">LIVE</span>
           )}
           {game.status === 'post' && <Chip>Final</Chip>}
+          {game.context.awayQbOut && (
+            <span className="chip border-amber-500/40 bg-amber-500/10 text-amber-300">
+              {away.abbr} QB Out
+            </span>
+          )}
+          {game.context.homeQbOut && (
+            <span className="chip border-amber-500/40 bg-amber-500/10 text-amber-300">
+              {home.abbr} QB Out
+            </span>
+          )}
           {game.context.divisionGame && <Chip>Division</Chip>}
           {game.context.weather === 'dome' && <Chip>Dome</Chip>}
           {game.context.notes && <Chip>{game.context.notes}</Chip>}

@@ -3,6 +3,7 @@ import { TEAMS } from '@/lib/teams';
 import { getCurrentWeek } from '@/lib/schedule';
 import { fetchEspnWeek } from '@/lib/espn';
 import { bestProp, propKey } from '@/lib/props';
+import { getInjuries, getRestDays, type TeamInjuries } from '@/lib/proxies';
 import type { PropMarket } from '@/data/props';
 import type { BookLine, Game, LivePropMap, TeamAbbr } from '@/lib/types';
 
@@ -98,12 +99,39 @@ export interface GamesResult {
   error?: string;
 }
 
+/** Apply injury (QB out + ruled-out players) and rest-day proxies to a game. */
+function applyProxies(
+  g: Game,
+  injuries: Partial<Record<TeamAbbr, TeamInjuries>>,
+  rest: Partial<Record<string, number>>,
+): Game {
+  const homeInj = injuries[g.home];
+  const awayInj = injuries[g.away];
+  const outPlayers = [...(homeInj?.unavailable ?? []), ...(awayInj?.unavailable ?? [])];
+  const context = {
+    ...g.context,
+    homeQbOut: homeInj?.qbOut || g.context.homeQbOut,
+    awayQbOut: awayInj?.qbOut || g.context.awayQbOut,
+    homeRestDays: rest[g.home] ?? g.context.homeRestDays,
+    awayRestDays: rest[g.away] ?? g.context.awayRestDays,
+  };
+  const next: Game = { ...g, context, outPlayers };
+  // Recompute the displayed prop so a ruled-out player is never shown.
+  next.prop = bestProp(next, next.livePropLines);
+  return next;
+}
+
 export async function getGames(week?: number): Promise<GamesResult> {
   const targetWeek = week ?? getCurrentWeek();
   const key = process.env.ODDS_API_KEY;
 
   try {
-    let games = await fetchEspnWeek(targetWeek);
+    const [espnGames, injuries, rest] = await Promise.all([
+      fetchEspnWeek(targetWeek),
+      getInjuries(),
+      getRestDays(targetWeek),
+    ]);
+    let games = espnGames.map((g) => applyProxies(g, injuries, rest));
     if (games.length && key) {
       games = await overlayFanDuel(games, key);
       // Live prop lines are an "additional market" that consumes extra quota,

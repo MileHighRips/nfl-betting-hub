@@ -1,4 +1,4 @@
-import { BrainCircuit } from 'lucide-react';
+import { BrainCircuit, Database } from 'lucide-react';
 import { SectionTitle, Chip } from '@/components/atoms';
 import { SIM_CONFIG } from '@/lib/simulation';
 import { MODEL_WEIGHT } from '@/lib/model';
@@ -38,12 +38,8 @@ const KEN_MODELS = [
 
 const FACTORS = [
   [
-    'Off/Def Matchup',
-    'Each team\u2019s offense vs the opponent\u2019s defense, in points — sets expected scoring.',
-  ],
-  [
     'Efficiency Matchup',
-    'Each team\u2019s offense vs the opponent\u2019s defense (points), the core of every score.',
+    'Each team\u2019s offense vs the opponent\u2019s defense, in points — sets expected scoring.',
   ],
   ['Home Field', 'Team-specific edge (altitude, crowd, dome): Denver/Seattle ~2.5, others ~1.8.'],
   [
@@ -68,6 +64,30 @@ const FACTORS = [
   [
     'Market Blend',
     `${Math.round(MODEL_WEIGHT * 100)}% model / ${Math.round((1 - MODEL_WEIGHT) * 100)}% vig-free market when sizing stakes.`,
+  ],
+];
+
+const DATA_PROXIES: [string, string][] = [
+  [
+    'ESPN Schedule & Odds',
+    'Real matchups, kickoff times, and live DraftKings spread/total/moneyline.',
+  ],
+  ['Live Scores & Status', 'In-game scores and final results power grading and the form model.'],
+  [
+    'Injuries',
+    'Starter-QB availability drops expected points; ruled-out players are dropped from props.',
+  ],
+  [
+    'Rest & Bye',
+    'Actual days of rest per team, derived from prior game dates (short weeks, byes).',
+  ],
+  [
+    'Results-Based Learning',
+    'Completed games run an Elo-style update, re-rating every team weekly.',
+  ],
+  [
+    'FanDuel (optional)',
+    'Add a free Odds-API key to line-shop FanDuel and pull exact posted prop lines.',
   ],
 ];
 
@@ -114,6 +134,28 @@ export default function MethodologyPage() {
           <Chip>Push-aware key numbers</Chip>
           <Chip>First-principles totals</Chip>
           <Chip>Vig removed · line-shopped</Chip>
+        </div>
+      </section>
+
+      <section className="card p-6">
+        <h3 className="text-base font-bold text-white">Live data proxies (free, no key)</h3>
+        <p className="mt-2 text-sm text-zinc-400">
+          The engine is fed by public data scraped in real time — no paid feeds required. Each layer
+          sharpens the ratings the simulation runs on.
+        </p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {DATA_PROXIES.map(([label, detail]) => (
+            <div
+              key={label}
+              className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <Database size={14} className="text-emerald-400" />
+                {label}
+              </div>
+              <div className="mt-0.5 text-xs text-zinc-500">{detail}</div>
+            </div>
+          ))}
         </div>
       </section>
 

@@ -110,6 +110,8 @@ export interface Game {
   awayScore?: number;
   /** Live posted prop lines when a prop feed is connected (transient). */
   livePropLines?: LivePropMap;
+  /** Names of players ruled out (from the injuries proxy) — excluded from props. */
+  outPlayers?: string[];
 }
 
 export interface GameContext {

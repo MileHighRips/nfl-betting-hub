@@ -169,6 +169,8 @@ export function bestProp(game: Game, live?: LivePropMap, sim?: PropSimEnv): Play
     [game.away, -homeMargin, awayImplied, game.home],
   ];
 
+  const out = new Set((game.outPlayers ?? []).map((p) => p.toLowerCase()));
+
   for (const [team, margin, implied, opp] of perTeam) {
     const env: Env = {
       teamMargin: margin,
@@ -177,6 +179,7 @@ export function bestProp(game: Game, live?: LivePropMap, sim?: PropSimEnv): Play
       oppDefense: staticDefense(opp),
     };
     for (const c of TEAM_PROPS[team] ?? []) {
+      if (out.has(c.player.toLowerCase())) continue; // ruled out — never recommend
       candidates.push(evaluate(c, team, env, live));
     }
   }
