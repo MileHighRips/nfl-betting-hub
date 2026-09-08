@@ -1,33 +1,39 @@
-import type { Game, ModelFactor, TeamAbbr } from './types';
+import type { Game, ModelFactor } from './types';
 import { TEAMS } from './teams';
-import { LEAGUE_AVG_TOTAL, homeFieldEdge } from './ratings';
+import { LEAGUE_AVG_PPG, homeFieldEdge, teamProfile } from './ratings';
+import { QB_DROPOFF, DEFAULT_QB_DROPOFF } from '@/data/ratings2026';
 import { travelEffect } from './geo';
 import type { Ratings } from './form';
+import type { TeamAbbr } from './types';
 
 /**
  * ============================================================================
- *  MONTE-CARLO GAME SIMULATION ENGINE
+ *  DRIVE-LEVEL MONTE-CARLO SIMULATION ENGINE
  * ============================================================================
- *  Rather than a single closed-form margin, the model builds each team's
- *  expected points from an offense/defense matchup and a full stack of
- *  situational factors, then simulates the game thousands of times as a pair of
- *  correlated scoring outcomes. Every market — spread (push-aware on key
- *  numbers), moneyline, total, team totals — is read off the same simulated
- *  distribution, which keeps them internally consistent.
+ *  Each game is played out thousands of times, drive by drive. Team scoring is
+ *  built from first principles — offensive efficiency vs the opponent's defense,
+ *  scaled by pace (possessions/game) — so the projected TOTAL comes from the
+ *  model itself, not the market. Every drive resolves to a touchdown, field
+ *  goal, or no score, which reproduces realistic football scores clustered on
+ *  3s and 7s and makes key-number push probabilities fall out naturally.
+ *
+ *  Factor stack feeding expected points:
+ *    offense/defense matchup · team-specific home field · rest/bye · travel &
+ *    body clock · weather (scoring + kicking) · QB availability (team-specific
+ *    backup dropoff) · divisional tightening · pace (totals lever).
  * ============================================================================
  */
 
 export const SIM_CONFIG = {
-  n: 20000,
-  teamScoreSd: 9.9, // NFL single-team points standard deviation
-  scoreCorrelation: 0.08, // shared game environment
+  n: 12000,
+  basePaceDrives: 11.3,
+  driveCountSd: 1.0,
   restPtPerDay: 0.12,
   restCap: 2.0,
-  qbOutSwing: 6.5,
-  divisionTighten: 0.9, // rivals play ~10% closer than raw ratings
+  divisionTighten: 0.93,
+  fgBaseRate: 0.155,
 };
 
-// Deterministic RNG so a given matchup renders identically every time.
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return function () {
@@ -57,67 +63,75 @@ export interface GameSim {
   marginMean: number;
   marginSd: number;
   totalMean: number;
-  margins: Float32Array; // home - away, per sim
+  drives: number;
+  margins: Float32Array;
   totals: Float32Array;
   factors: ModelFactor[];
 }
 
-function weatherPoints(w: Game['context']['weather']): number {
+/** Weather multipliers on scoring and field-goal success. */
+function weatherFactors(w: Game['context']['weather']): { scoring: number; fg: number } {
   switch (w) {
     case 'dome':
-      return 0.4;
+      return { scoring: 1.01, fg: 1.02 };
     case 'wind':
-      return -1.2;
+      return { scoring: 0.92, fg: 0.8 };
     case 'rain':
-      return -0.8;
+      return { scoring: 0.95, fg: 0.9 };
     case 'snow':
-      return -1.5;
+      return { scoring: 0.88, fg: 0.7 };
     case 'cold':
-      return -0.4;
+      return { scoring: 0.98, fg: 0.92 };
     default:
-      return 0;
+      return { scoring: 1.0, fg: 1.0 };
   }
 }
 
 function kickoffHourEt(iso: string): number {
-  // ESPN times are UTC; ET ≈ UTC-4 in September.
   const d = new Date(iso);
   return (d.getUTCHours() + 24 - 4) % 24;
+}
+
+function qbDrop(team: TeamAbbr): number {
+  return QB_DROPOFF[team] ?? DEFAULT_QB_DROPOFF;
 }
 
 export function simulateGame(game: Game, ratings?: Ratings): GameSim {
   const home = game.home;
   const away = game.away;
-  const netHome = ratings?.[home] ?? TEAMS[home].rating;
-  const netAway = ratings?.[away] ?? TEAMS[away].rating;
   const c = game.context;
   const factors: ModelFactor[] = [];
 
-  // Market total anchors the scoring environment (pace, pass tendencies, most
-  // weather are already priced in). Our ratings drive the MARGIN; we only take
-  // a light independent lean on the total for adverse weather.
-  const marketTotal =
-    game.books.reduce((s, b) => s + b.total, 0) / (game.books.length || 1) || LEAGUE_AVG_TOTAL;
+  // In-season form as a net delta from the preseason anchor.
+  const formHome = ratings ? ratings[home] - TEAMS[home].rating : 0;
+  const formAway = ratings ? ratings[away] - TEAMS[away].rating : 0;
+  const pH = teamProfile(home, formHome);
+  const pA = teamProfile(away, formAway);
 
-  // ---- Expected margin (home perspective) ----
-  let margin = netHome - netAway;
+  // Expected points from the efficiency matchup.
+  let homeExp = LEAGUE_AVG_PPG + pH.offense + pA.defense;
+  let awayExp = LEAGUE_AVG_PPG + pA.offense + pH.defense;
   factors.push({
-    label: 'Power Ratings',
-    detail: `${TEAMS[home].name} ${netHome.toFixed(1)} vs ${TEAMS[away].name} ${netAway.toFixed(1)}`,
-    impact: netHome - netAway,
+    label: 'Efficiency Matchup',
+    detail: `${TEAMS[home].name} net ${pH.net.toFixed(1)} vs ${TEAMS[away].name} net ${pA.net.toFixed(1)}`,
+    impact: pH.net - pA.net,
   });
 
+  // Team-specific home field (weighted toward the home offense).
   const hfa = c.neutralSite ? 0 : homeFieldEdge(home);
-  margin += hfa;
+  homeExp += hfa * 0.55;
+  awayExp -= hfa * 0.45;
   if (hfa)
     factors.push({ label: 'Home Field', detail: `${TEAMS[home].name} (${hfa} pts)`, impact: hfa });
 
+  // Rest / bye.
   const restAdj = Math.max(
     -SIM_CONFIG.restCap,
     Math.min(SIM_CONFIG.restCap, (c.homeRestDays - c.awayRestDays) * SIM_CONFIG.restPtPerDay),
   );
   if (Math.abs(restAdj) >= 0.1) {
-    margin += restAdj;
+    homeExp += restAdj / 2;
+    awayExp -= restAdj / 2;
     factors.push({
       label: 'Rest',
       detail: `${c.homeRestDays}d vs ${c.awayRestDays}d`,
@@ -125,53 +139,88 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
     });
   }
 
+  // Travel & body clock (away team).
   const travel = travelEffect(home, away, kickoffHourEt(game.kickoff));
   if (travel.awayPenalty >= 0.05) {
-    margin += travel.awayPenalty; // away penalized → home margin up
+    awayExp -= travel.awayPenalty;
     factors.push({ label: 'Travel', detail: travel.detail, impact: travel.awayPenalty });
   }
 
+  // Quarterback availability (team-specific backup dropoff).
   if (c.homeQbOut) {
-    margin -= SIM_CONFIG.qbOutSwing;
+    const d = qbDrop(home);
+    homeExp -= d;
     factors.push({
       label: 'QB Out (Home)',
-      detail: `${TEAMS[home].name} starter out`,
-      impact: -SIM_CONFIG.qbOutSwing,
+      detail: `${TEAMS[home].name} backup (−${d})`,
+      impact: -d,
     });
   }
   if (c.awayQbOut) {
-    margin += SIM_CONFIG.qbOutSwing;
+    const d = qbDrop(away);
+    awayExp -= d;
     factors.push({
       label: 'QB Out (Away)',
-      detail: `${TEAMS[away].name} starter out`,
-      impact: SIM_CONFIG.qbOutSwing,
+      detail: `${TEAMS[away].name} backup (−${d})`,
+      impact: d,
     });
   }
 
+  // Divisional familiarity tightens the margin.
   if (c.divisionGame) {
-    margin *= SIM_CONFIG.divisionTighten;
+    const mid = (homeExp + awayExp) / 2;
+    homeExp = mid + (homeExp - mid) * SIM_CONFIG.divisionTighten;
+    awayExp = mid + (awayExp - mid) * SIM_CONFIG.divisionTighten;
     factors.push({ label: 'Division', detail: 'Rivalry tightens margin', impact: 0 });
   }
 
-  // ---- Expected total (market-anchored, light weather lean) ----
-  const wx = weatherPoints(c.weather);
-  const wxLean = wx < 0 ? wx * 0.5 : 0; // only adverse weather nudges our total
-  const totalExp = marketTotal + wxLean;
-  if (wxLean) factors.push({ label: 'Weather', detail: String(c.weather), impact: wxLean });
+  // Weather suppresses scoring (and kicking, below).
+  const wf = weatherFactors(c.weather);
+  if (wf.scoring !== 1) {
+    const before = homeExp + awayExp;
+    homeExp *= wf.scoring;
+    awayExp *= wf.scoring;
+    if (wf.scoring < 1)
+      factors.push({
+        label: 'Weather',
+        detail: String(c.weather),
+        impact: homeExp + awayExp - before,
+      });
+  }
 
-  // Decompose into team expectations (preserves both margin and total).
-  let homeExp = (totalExp + margin) / 2;
-  let awayExp = (totalExp - margin) / 2;
+  // Pace scales the TOTAL (more possessions → more points) without moving margin.
+  const paceFactor = (pH.pace + pA.pace) / 2;
+  {
+    const total = homeExp + awayExp;
+    const margin = homeExp - awayExp;
+    const scaled = total * paceFactor;
+    homeExp = (scaled + margin) / 2;
+    awayExp = (scaled - margin) / 2;
+    if (Math.abs(paceFactor - 1) > 0.005) {
+      factors.push({
+        label: 'Pace',
+        detail: `${paceFactor.toFixed(2)}× tempo`,
+        impact: total * (paceFactor - 1),
+      });
+    }
+  }
+
   homeExp = Math.max(3, homeExp);
   awayExp = Math.max(3, awayExp);
 
-  // ---- Simulate ----
+  // ---- Drive-level simulation ----
   const n = SIM_CONFIG.n;
-  const sd = SIM_CONFIG.teamScoreSd;
-  const rho = SIM_CONFIG.scoreCorrelation;
-  const rhoComp = Math.sqrt(1 - rho * rho);
-  const rand = mulberry32(hashSeed(game.id));
+  const drivesMean = SIM_CONFIG.basePaceDrives * paceFactor;
+  const fgRate = SIM_CONFIG.fgBaseRate * wf.fg;
 
+  const ppdHome = homeExp / drivesMean;
+  const ppdAway = awayExp / drivesMean;
+  const pTdHome = Math.max(0.02, Math.min(0.72, (ppdHome - 3 * fgRate) / 6.96));
+  const pTdAway = Math.max(0.02, Math.min(0.72, (ppdAway - 3 * fgRate) / 6.96));
+  const pScoreHome = pTdHome + fgRate;
+  const pScoreAway = pTdAway + fgRate;
+
+  const rand = mulberry32(hashSeed(game.id));
   const margins = new Float32Array(n);
   const totals = new Float32Array(n);
   let homeWins = 0;
@@ -179,19 +228,25 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
   let sumAway = 0;
   let sumMargin = 0;
   let sumMargin2 = 0;
+  let sumDrives = 0;
 
   for (let i = 0; i < n; i++) {
-    // Box-Muller for two independent standard normals.
     const u1 = Math.max(1e-9, rand());
     const u2 = rand();
-    const r = Math.sqrt(-2 * Math.log(u1));
-    const z1 = r * Math.cos(2 * Math.PI * u2);
-    const z2 = r * Math.sin(2 * Math.PI * u2);
+    const zDrives = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    const d = Math.max(8, Math.min(15, Math.round(drivesMean + zDrives * SIM_CONFIG.driveCountSd)));
+    sumDrives += d;
 
-    let h = homeExp + sd * z1;
-    let a = awayExp + sd * (rho * z1 + rhoComp * z2);
-    h = Math.max(0, Math.round(h));
-    a = Math.max(0, Math.round(a));
+    let h = 0;
+    let a = 0;
+    for (let k = 0; k < d; k++) {
+      const rh = rand();
+      if (rh < pTdHome) h += 7;
+      else if (rh < pScoreHome) h += 3;
+      const ra = rand();
+      if (ra < pTdAway) a += 7;
+      else if (ra < pScoreAway) a += 3;
+    }
 
     const m = h - a;
     margins[i] = m;
@@ -217,15 +272,15 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
     marginMean,
     marginSd,
     totalMean: (sumHome + sumAway) / n,
+    drives: sumDrives / n,
     margins,
     totals,
     factors,
   };
 }
 
-/** Probability the home team covers a given home spread (push-aware). */
+/** Probability the home team covers a home spread (push-aware). */
 export function homeCoverProb(sim: GameSim, homeSpread: number): number {
-  // Home covers when margin + homeSpread > 0. Split pushes.
   const need = -homeSpread;
   let win = 0;
   let push = 0;
@@ -238,7 +293,7 @@ export function homeCoverProb(sim: GameSim, homeSpread: number): number {
   return decided > 0 ? win / decided : 0.5;
 }
 
-/** Probability the total goes over a given number (push-aware). */
+/** Probability the total goes over a number (push-aware). */
 export function overProb(sim: GameSim, line: number): number {
   let over = 0;
   let push = 0;

@@ -41,6 +41,10 @@ const FACTORS = [
     'Off/Def Matchup',
     'Each team\u2019s offense vs the opponent\u2019s defense, in points — sets expected scoring.',
   ],
+  [
+    'Efficiency Matchup',
+    'Each team\u2019s offense vs the opponent\u2019s defense (points), the core of every score.',
+  ],
   ['Home Field', 'Team-specific edge (altitude, crowd, dome): Denver/Seattle ~2.5, others ~1.8.'],
   [
     'Rest & Bye',
@@ -50,8 +54,12 @@ const FACTORS = [
     'Travel & Body Clock',
     'Haversine trip distance + timezone shift; penalizes West teams in early ET kicks.',
   ],
-  ['Weather', 'Wind/rain/snow/cold suppress scoring; dome nudges up.'],
-  ['QB Availability', `±${SIM_CONFIG.qbOutSwing} pts when a starting QB is ruled out.`],
+  ['Weather', 'Wind/rain/snow/cold suppress scoring and field-goal success; dome nudges up.'],
+  ['Pace', 'Team tempo scales possessions per game — the lever that drives total value.'],
+  [
+    'QB Availability',
+    'Team-specific backup dropoff (e.g. −9 for elite-QB teams) when a starter is out.',
+  ],
   ['Pass-D Regression', 'Ken\u2019s least-sticky-unit signal is baked into the team ratings.'],
   [
     'In-Season Learning',
@@ -73,13 +81,19 @@ export default function MethodologyPage() {
       />
 
       <section className="card p-6">
-        <h3 className="text-base font-bold text-white">The weighted confidence engine</h3>
+        <h3 className="text-base font-bold text-white">The drive-level simulation engine</h3>
         <p className="mt-2 text-sm text-zinc-400">
-          Every game runs through a <span className="text-white">Monte-Carlo simulation</span>: the
-          factors below build each team&rsquo;s expected points, then the game is played out{' '}
-          {(SIM_CONFIG.n / 1000).toFixed(0)},000 times as a pair of correlated scoring outcomes.
+          Every game is played out{' '}
+          <span className="text-white">
+            {(SIM_CONFIG.n / 1000).toFixed(0)},000 times, drive by drive
+          </span>
+          . The factors below build each team&rsquo;s expected points from first principles —
+          offensive efficiency vs the opponent&rsquo;s defense, scaled by pace — and each possession
+          resolves to a touchdown, field goal, or nothing. Because the{' '}
+          <span className="text-white">total is modeled, not pinned to the market</span>, genuine
+          Over/Under value shows up when our efficiency-and-pace view disagrees with the book.
           Spread (push-aware on key numbers), moneyline, total and team totals are all read off the
-          same simulated distribution, so they stay internally consistent. Edge is{' '}
+          same simulated distribution. Edge is{' '}
           <span className="text-emerald-400">model probability − market probability</span>; stakes
           blend {Math.round(MODEL_WEIGHT * 100)}% model with the vig-free price and are sized with
           fractional Kelly, hard-capped at 1 unit.
@@ -96,9 +110,9 @@ export default function MethodologyPage() {
           ))}
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Chip>{(SIM_CONFIG.n / 1000).toFixed(0)}k Monte-Carlo sims</Chip>
+          <Chip>{(SIM_CONFIG.n / 1000).toFixed(0)}k drive-level sims</Chip>
           <Chip>Push-aware key numbers</Chip>
-          <Chip>Correlated team scores</Chip>
+          <Chip>First-principles totals</Chip>
           <Chip>Vig removed · line-shopped</Chip>
         </div>
       </section>
