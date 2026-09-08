@@ -75,9 +75,24 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
           <div className="truncate text-sm font-bold text-white">
             {away.city} {away.name} at {home.city} {home.name}
           </div>
-          <div className="text-xs text-zinc-500">{fmtKick(game.kickoff)}</div>
+          <div className="text-xs text-zinc-500">
+            {game.status === 'pre' || !game.status ? (
+              fmtKick(game.kickoff)
+            ) : (
+              <span className="mono font-semibold text-zinc-300">
+                {away.abbr} {game.awayScore} · {home.abbr} {game.homeScore}
+                <span className="ml-1 text-zinc-500">
+                  {game.statusDetail ?? (game.status === 'in' ? 'Live' : 'Final')}
+                </span>
+              </span>
+            )}
+          </div>
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+          {game.status === 'in' && (
+            <span className="chip border-red-500/40 bg-red-500/10 text-red-300">LIVE</span>
+          )}
+          {game.status === 'post' && <Chip>Final</Chip>}
           {game.context.divisionGame && <Chip>Division</Chip>}
           {game.context.weather === 'dome' && <Chip>Dome</Chip>}
           {game.context.notes && <Chip>{game.context.notes}</Chip>}

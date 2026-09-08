@@ -1,4 +1,4 @@
-import type { BookLine, Game, ModelFactor, ModelPick } from './types';
+import type { BookLine, Game, ModelFactor, ModelPick, TeamAbbr } from './types';
 import { TEAMS } from './teams';
 import {
   americanToProb,
@@ -75,18 +75,21 @@ export interface GameAnalysis {
   topPick: ModelPick;
 }
 
-export function analyzeGame(game: Game): GameAnalysis {
+export function analyzeGame(game: Game, ratings?: Record<TeamAbbr, number>): GameAnalysis {
   const home = TEAMS[game.home];
   const away = TEAMS[game.away];
   const c = game.context;
   const factors: ModelFactor[] = [];
 
-  // 1. Power rating differential.
-  let margin = home.rating - away.rating;
+  const homeRating = ratings?.[game.home] ?? home.rating;
+  const awayRating = ratings?.[game.away] ?? away.rating;
+
+  // 1. Power rating differential (in-season adjusted when results are in).
+  let margin = homeRating - awayRating;
   factors.push({
     label: 'Power Rating Edge',
-    detail: `${home.name} ${home.rating.toFixed(1)} vs ${away.name} ${away.rating.toFixed(1)}`,
-    impact: home.rating - away.rating,
+    detail: `${home.name} ${homeRating.toFixed(1)} vs ${away.name} ${awayRating.toFixed(1)}`,
+    impact: homeRating - awayRating,
   });
 
   // 2. Home-field advantage.

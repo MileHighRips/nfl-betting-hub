@@ -49,8 +49,12 @@ const FACTORS = [
   ],
   ['Pass-D Regression', 'Ken\u2019s least-sticky-unit signal nudges the season expectation.'],
   [
+    'In-Season Learning',
+    'After every completed game, an Elo-style margin update adjusts each team\u2019s power rating from real results.',
+  ],
+  [
     'Market Anchor',
-    `${(MODEL_CONFIG.marketBlend * 100).toFixed(0)}% weight to the vig-free consensus so we never stray absurdly from an efficient price.`,
+    `${(MODEL_CONFIG.marketBlend * 100).toFixed(0)}% weight to the vig-free DraftKings line so we never stray absurdly from an efficient price.`,
   ],
 ];
 
@@ -71,7 +75,8 @@ export default function MethodologyPage() {
           normal curve (σ = {MODEL_CONFIG.sigma}), then blend it with the market&rsquo;s vig-removed
           price. Edge is{' '}
           <span className="text-emerald-400">model probability − market probability</span>, and
-          stakes are sized with quarter-Kelly, capped at 3 units.
+          stakes are sized with quarter-Kelly, hard-capped at 1 unit — you never risk more than a
+          single unit on any bet.
         </p>
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           {FACTORS.map(([label, detail]) => (
@@ -111,15 +116,15 @@ export default function MethodologyPage() {
         <p className="mt-2 text-sm text-zinc-400">
           One unit starts at $10 (configurable on the Tracker). Recommended stakes come from
           fractional Kelly on the model edge, so bigger, more confident edges get more units — but
-          never more than 3u on a single play. Track results on the Tracker and the hub keeps a live
-          record and ROI.
+          never more than 1 unit on a single play. Track results on the Tracker and the hub keeps a
+          live record and ROI.
         </p>
       </section>
 
       <p className="text-xs text-zinc-600">
         This hub adapts Ken Barkley&rsquo;s publicly-described 2026 methodology for personal use.
-        Odds shown are the seed layer unless a free odds-API key is configured. For entertainment
-        only — bet responsibly.
+        Live schedule, DraftKings odds and scores come free from ESPN; add a free Odds-API key to
+        overlay FanDuel. For entertainment only — bet responsibly.
       </p>
     </div>
   );

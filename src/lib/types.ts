@@ -94,6 +94,11 @@ export interface Game {
   prop: PlayerProp;
   /** Contextual factors used by the model. */
   context: GameContext;
+  /** Live game state (from ESPN). */
+  status?: 'pre' | 'in' | 'post';
+  statusDetail?: string;
+  homeScore?: number;
+  awayScore?: number;
 }
 
 export interface GameContext {

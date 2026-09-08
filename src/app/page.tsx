@@ -4,6 +4,7 @@ import { getGames } from '@/lib/odds-source';
 import { analyzeGame } from '@/lib/model';
 import { FUTURES } from '@/data/futures';
 import { SEASON, getCurrentWeek } from '@/lib/schedule';
+import { getFormRatings } from '@/lib/form';
 import { Chip, ConfidenceBar, OddsBadge, SectionTitle } from '@/components/atoms';
 import PlaceBetButton from '@/components/PlaceBetButton';
 import DashboardStats from '@/components/DashboardStats';
@@ -13,8 +14,11 @@ export const dynamic = 'force-dynamic';
 export default async function DashboardPage() {
   const CURRENT_WEEK = getCurrentWeek();
   const CURRENT_SEASON = SEASON;
-  const { games, source } = await getGames(CURRENT_WEEK);
-  const analyses = games.map(analyzeGame);
+  const [{ games, source, provider }, ratings] = await Promise.all([
+    getGames(CURRENT_WEEK),
+    getFormRatings(CURRENT_WEEK),
+  ]);
+  const analyses = games.map((g) => analyzeGame(g, ratings));
 
   const topPlays = analyses
     .map((a) => a.topPick)
@@ -34,7 +38,7 @@ export default async function DashboardPage() {
         <div className="relative">
           <div className="flex items-center gap-2">
             <Chip variant="value">
-              <Flame size={12} /> {source === 'live' ? 'Live Odds' : 'Seed Odds'}
+              <Flame size={12} /> {source === 'live' ? provider : 'Seed Odds'}
             </Chip>
             <Chip>
               Season {CURRENT_SEASON} · Week {CURRENT_WEEK}

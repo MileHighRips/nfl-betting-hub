@@ -1,6 +1,7 @@
 import { CalendarRange, CalendarClock } from 'lucide-react';
 import { getGames } from '@/lib/odds-source';
 import { analyzeGame } from '@/lib/model';
+import { getFormRatings } from '@/lib/form';
 import { SEASON, getCurrentWeek } from '@/lib/schedule';
 import GameCard from '@/components/GameCard';
 import WeekSelector from '@/components/WeekSelector';
@@ -17,9 +18,10 @@ export default async function SlatePage({
   const currentWeek = getCurrentWeek();
   const week = sp.week ? Math.max(1, Math.min(18, Number(sp.week) || currentWeek)) : currentWeek;
 
-  const { games, source, error } = await getGames(week);
+  const { games, source, provider, error } = await getGames(week);
+  const ratings = await getFormRatings(week);
   const analyses = games
-    .map(analyzeGame)
+    .map((g) => analyzeGame(g, ratings))
     .sort((a, b) => new Date(a.game.kickoff).getTime() - new Date(b.game.kickoff).getTime());
 
   const bestBets = analyses.filter((a) => a.topPick.confidence >= 62 && a.topPick.units > 0).length;
@@ -33,9 +35,7 @@ export default async function SlatePage({
           icon={<CalendarRange size={18} />}
         />
         <div className="flex flex-wrap items-center gap-2">
-          <Chip variant={source === 'live' ? 'value' : 'default'}>
-            {source === 'live' ? 'Live odds feed' : 'Seed odds'}
-          </Chip>
+          <Chip variant={source === 'live' ? 'value' : 'default'}>{provider}</Chip>
           <WeekSelector week={week} currentWeek={currentWeek} />
         </div>
       </div>
@@ -53,9 +53,9 @@ export default async function SlatePage({
             No lines posted for Week {week} yet
           </div>
           <p className="max-w-md text-xs text-zinc-500">
-            {source === 'seed'
-              ? 'The seed slate only covers Week 1. Add a free ODDS_API_KEY in .env.local to pull live DraftKings & FanDuel lines for every week automatically as books post them.'
-              : 'Sportsbooks typically post a week\u2019s lines 6\u201310 days out. This week will fill in automatically once DraftKings & FanDuel release their numbers.'}
+            Sportsbooks typically post a week&rsquo;s lines 6&ndash;10 days out. This week fills in
+            automatically from the live ESPN feed once the games are scheduled and DraftKings posts
+            numbers.
           </p>
         </div>
       ) : (

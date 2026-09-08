@@ -2,6 +2,7 @@ import { Flame, Zap, AlertTriangle } from 'lucide-react';
 import { getGames } from '@/lib/odds-source';
 import { analyzeGame } from '@/lib/model';
 import { FUTURES } from '@/data/futures';
+import { getFormRatings } from '@/lib/form';
 import { getCurrentWeek } from '@/lib/schedule';
 import { Chip, ConfidenceBar, OddsBadge, SectionTitle } from '@/components/atoms';
 import PlaceBetButton from '@/components/PlaceBetButton';
@@ -11,8 +12,11 @@ export const dynamic = 'force-dynamic';
 
 export default async function ValuePage() {
   const CURRENT_WEEK = getCurrentWeek();
-  const { games } = await getGames(CURRENT_WEEK);
-  const analyses = games.map(analyzeGame);
+  const [{ games }, ratings] = await Promise.all([
+    getGames(CURRENT_WEEK),
+    getFormRatings(CURRENT_WEEK),
+  ]);
+  const analyses = games.map((g) => analyzeGame(g, ratings));
 
   // Collect every game pick with a positive edge.
   const gamePicks: ModelPick[] = [];

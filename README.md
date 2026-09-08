@@ -38,17 +38,21 @@ The projected margin becomes a win/cover probability via an NFL-calibrated norma
 with the market price. **Edge = model probability − market probability**, and stakes use
 quarter-Kelly (capped at 3u).
 
-## Live odds (free)
+## Live data (free, no key)
 
-The hub ships with a seed slate so it always renders. For **free live lines**, sign up at
-[the-odds-api.com](https://the-odds-api.com/) (free tier ≈ 500 requests/month), then:
+The primary feed is **ESPN's free API** — real schedule, real **DraftKings** odds, and live
+scores/status for every week, with **no key required**. The current week is detected from the
+date, and completed results feed an in-season Elo-style model that sharpens the ratings each week.
+
+To also line-shop **FanDuel**, add a free key from
+[the-odds-api.com](https://the-odds-api.com/) (free tier ≈ 500 requests/month):
 
 ```bash
 cp .env.example .env.local
 # paste your key into ODDS_API_KEY
 ```
 
-DraftKings + FanDuel odds will then override the seed lines automatically.
+FanDuel prices then overlay alongside DraftKings automatically.
 
 ## Getting started
 

@@ -44,8 +44,9 @@ export function kellyUnits(modelProb: number, odds: number, fraction = 0.25): nu
   if (kelly <= 0) return 0;
   const staked = kelly * fraction;
   // Map fractional-Kelly bankroll fraction to a friendly unit band (1u ≈ 1% roll).
+  // Hard cap at 1 unit — never risk more than a single unit on any bet.
   const units = staked * 100;
-  return Math.max(0, Math.min(3, Number(units.toFixed(2))));
+  return Math.max(0, Math.min(1, Number(units.toFixed(2))));
 }
 
 /** Convert a probability edge into a 0-100 display confidence score. */
