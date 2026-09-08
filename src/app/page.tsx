@@ -3,7 +3,7 @@ import { ArrowRight, Flame, Star, TrendingUp, Trophy } from 'lucide-react';
 import { getGames } from '@/lib/odds-source';
 import { analyzeGame } from '@/lib/model';
 import { FUTURES } from '@/data/futures';
-import { CURRENT_SEASON, CURRENT_WEEK } from '@/data/games';
+import { SEASON, getCurrentWeek } from '@/lib/schedule';
 import { Chip, ConfidenceBar, OddsBadge, SectionTitle } from '@/components/atoms';
 import PlaceBetButton from '@/components/PlaceBetButton';
 import DashboardStats from '@/components/DashboardStats';
@@ -11,7 +11,9 @@ import DashboardStats from '@/components/DashboardStats';
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
-  const { games, source } = await getGames();
+  const CURRENT_WEEK = getCurrentWeek();
+  const CURRENT_SEASON = SEASON;
+  const { games, source } = await getGames(CURRENT_WEEK);
   const analyses = games.map(analyzeGame);
 
   const topPlays = analyses

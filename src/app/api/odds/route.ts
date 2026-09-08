@@ -8,7 +8,9 @@ import { getGames } from '@/lib/odds-source';
  */
 export const revalidate = 300;
 
-export async function GET() {
-  const result = await getGames();
+export async function GET(req: Request) {
+  const weekParam = new URL(req.url).searchParams.get('week');
+  const week = weekParam ? Number(weekParam) : undefined;
+  const result = await getGames(Number.isFinite(week) ? week : undefined);
   return NextResponse.json(result);
 }

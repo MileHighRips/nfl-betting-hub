@@ -425,6 +425,3 @@ export const WEEK1_GAMES: Game[] = SEEDS.map((s, i) => ({
     notes: s.notes,
   },
 }));
-
-export const CURRENT_WEEK = 1;
-export const CURRENT_SEASON = 2026;

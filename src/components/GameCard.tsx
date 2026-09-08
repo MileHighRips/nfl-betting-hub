@@ -7,7 +7,17 @@ import { Chip, ConfidenceBar, OddsBadge, TeamBadge } from './atoms';
 import PlaceBetButton from './PlaceBetButton';
 import type { ModelPick } from '@/lib/types';
 
-function PickRow({ label, pick, matchup }: { label: string; pick: ModelPick; matchup: string }) {
+function PickRow({
+  label,
+  pick,
+  matchup,
+  week,
+}: {
+  label: string;
+  pick: ModelPick;
+  matchup: string;
+  week: number;
+}) {
   const edgePos = pick.edge > 0;
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 sm:flex-row sm:items-center">
@@ -30,7 +40,7 @@ function PickRow({ label, pick, matchup }: { label: string; pick: ModelPick; mat
         {pick.units > 0 ? (
           <PlaceBetButton
             description={`${pick.selection} (${matchup})`}
-            market={`Week 1 · ${pick.type}`}
+            market={`Week ${week} · ${pick.type}`}
             price={pick.price}
             stakeUnits={Number(pick.units.toFixed(2))}
             confidence={pick.confidence}
@@ -91,10 +101,15 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
 
       {/* Model picks */}
       <div className="space-y-2 px-4 pb-3">
-        <PickRow label="Model · Spread" pick={a.spread} matchup={matchup} />
-        <PickRow label="Model · Total" pick={a.total} matchup={matchup} />
+        <PickRow label="Model · Spread" pick={a.spread} matchup={matchup} week={game.week} />
+        <PickRow label="Model · Total" pick={a.total} matchup={matchup} week={game.week} />
         {a.moneyline.confidence >= a.spread.confidence && (
-          <PickRow label="Model · Moneyline" pick={a.moneyline} matchup={matchup} />
+          <PickRow
+            label="Model · Moneyline"
+            pick={a.moneyline}
+            matchup={matchup}
+            week={game.week}
+          />
         )}
       </div>
 
@@ -111,7 +126,7 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
             <OddsBadge price={a.upset.price} book={a.upset.book} />
             <PlaceBetButton
               description={`${a.upset.selection} (${matchup})`}
-              market="Week 1 · Upset"
+              market={`Week ${game.week} · Upset`}
               price={a.upset.price}
               stakeUnits={Number(a.upset.units.toFixed(2))}
               confidence={a.upset.confidence}
@@ -145,7 +160,7 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
             </span>
             <PlaceBetButton
               description={`${game.prop.player} ${game.prop.side} ${game.prop.line} ${game.prop.market} (${matchup})`}
-              market="Week 1 · Prop"
+              market={`Week ${game.week} · Prop`}
               price={game.prop.price}
               stakeUnits={Number(a.prop.units.toFixed(2)) || 0.5}
               confidence={game.prop.confidence}
