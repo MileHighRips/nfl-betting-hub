@@ -7,6 +7,36 @@ game, and a bankroll tracker that shows live profit & loss.
 
 > Built for personal use. For entertainment only — bet responsibly.
 
+## 🔗 Links & opening on your phone (Safari)
+
+- **GitHub repo:** https://github.com/MileHighRips/nfl-betting-hub
+  _(rename in this README if your GitHub username/repo differ)._
+
+A GitHub repo only hosts the **code** — to actually open the running app in Safari on your phone,
+use one of these:
+
+1. **Same Wi‑Fi (instant):** with `npm run dev` running on your computer, the terminal prints a
+   `Network:` URL like `http://192.168.x.x:3000`. Open that in Safari on your phone while on the
+   same network.
+2. **Anywhere via a public HTTPS link (recommended):** deploy free to Vercel and open the
+   `*.vercel.app` URL in Safari. One‑click deploy from the repo:
+
+   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/MileHighRips/nfl-betting-hub)
+
+   Or from the project folder:
+
+   ```bash
+   npm i -g vercel
+   vercel            # first run links/creates the project
+   vercel --prod     # gives you the public https URL for Safari
+   ```
+
+   Add your `ODDS_API_KEY` (and optional `ODDS_API_PROPS`) in the Vercel project's
+   Environment Variables to enable FanDuel + live prop lines in production.
+
+> Note: this app uses server rendering + API routes, so plain **GitHub Pages won't run it** —
+> Vercel (or any Node host) is the right target for a live URL.
+
 ## Features
 
 - **Dashboard** — top model plays, underdog upsets, Ken's actual bets, biggest value, live P/L.

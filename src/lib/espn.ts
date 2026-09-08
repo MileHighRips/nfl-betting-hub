@@ -1,7 +1,7 @@
 import { TEAMS } from '@/lib/teams';
-import { STAR_PROPS } from '@/data/starPlayers';
+import { bestProp } from '@/lib/props';
 import { SEASON } from '@/lib/schedule';
-import type { BookLine, Game, PlayerProp, TeamAbbr } from '@/lib/types';
+import type { BookLine, Game, TeamAbbr } from '@/lib/types';
 
 /**
  * ESPN free scoreboard API — real schedule, real DraftKings odds, and live
@@ -80,27 +80,7 @@ function dkFromEspn(odds: EspnOdds | undefined, homeSpread: number): BookLine {
   };
 }
 
-/** Synthesize the single best prop for a game from the favored team's star. */
-function synthProp(home: TeamAbbr, away: TeamAbbr, homeSpread: number): PlayerProp {
-  const favIsHome = homeSpread <= 0;
-  const favTeam = favIsHome ? home : away;
-  const star = STAR_PROPS[favTeam];
-  const t = TEAMS[favTeam];
-  const projection = Number((star.baseline * 1.06).toFixed(1));
-  return {
-    player: star.player,
-    team: favTeam,
-    market: star.market,
-    line: star.baseline,
-    side: 'Over',
-    price: -114,
-    book: 'DraftKings',
-    projection,
-    confidence: 61,
-    rationale: `${t.name} are favored; ${star.player} is the primary volume target with the model projecting positive game script (proj ${projection}). Verify status before betting.`,
-  };
-}
-
+/** Build the game, then attach the model's single best prop (Over or Under). */
 function buildGame(ev: EspnEvent, week: number): Game | null {
   const comp = ev.competitions?.[0];
   if (!comp) return null;
@@ -120,7 +100,7 @@ function buildGame(ev: EspnEvent, week: number): Game | null {
   const dk = dkFromEspn(odds, homeSpread);
   const state = (comp.status?.type?.state as 'pre' | 'in' | 'post') ?? 'pre';
 
-  return {
+  const game: Game = {
     id: `${SEASON}-w${week}-${away}-${home}`.toLowerCase(),
     week,
     season: SEASON,
@@ -128,7 +108,18 @@ function buildGame(ev: EspnEvent, week: number): Game | null {
     home,
     away,
     books: [dk, { ...dk, book: 'FanDuel' }],
-    prop: synthProp(home, away, dk.spread),
+    prop: {
+      player: '',
+      team: home,
+      market: 'Receiving Yards',
+      line: 0,
+      side: 'Over',
+      price: -114,
+      book: 'DraftKings',
+      projection: 0,
+      confidence: 0,
+      rationale: '',
+    },
     context: {
       homeRestDays: 7,
       awayRestDays: 7,
@@ -142,6 +133,8 @@ function buildGame(ev: EspnEvent, week: number): Game | null {
     homeScore: Number(homeC.score ?? 0),
     awayScore: Number(awayC.score ?? 0),
   };
+  game.prop = bestProp(game);
+  return game;
 }
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';

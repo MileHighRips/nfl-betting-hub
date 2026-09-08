@@ -112,6 +112,21 @@ export default function MethodologyPage() {
       </section>
 
       <section className="card p-6">
+        <h3 className="text-base font-bold text-white">Player prop model</h3>
+        <p className="mt-2 text-sm text-zinc-400">
+          The single best prop per game is chosen by projecting every candidate (QBs, lead backs,
+          top receivers, marquee rushers) from the <span className="text-white">live</span> game
+          environment — each team&rsquo;s implied total and game script from the current DraftKings
+          spread/total. Pass volume rises for trailing teams; rushing rises for favorites
+          controlling the clock. Each projection is compared to the line and turned into an
+          Over/Under probability with a per-market standard deviation, so the model backs the{' '}
+          <span className="text-emerald-400">Over or the Under</span> — whichever holds the edge —
+          and surfaces the highest-conviction look. Connect a live prop feed to replace the neutral
+          baselines with the exact posted lines.
+        </p>
+      </section>
+
+      <section className="card p-6">
         <h3 className="text-base font-bold text-white">Staking &amp; bankroll</h3>
         <p className="mt-2 text-sm text-zinc-400">
           One unit starts at $10 (configurable on the Tracker). Recommended stakes come from
