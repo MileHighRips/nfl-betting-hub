@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🏈 LockyLines — NFL Football Sports Betting Hub
 
-## Getting Started
+A sleek, mathematically-grounded NFL betting hub built on **Ken Barkley's** 2026 models. It gives
+you each week's lines from **DraftKings & FanDuel**, a transparent weighted confidence engine,
+every futures market, a value board for out-of-whack prices, one high-confidence player prop per
+game, and a bankroll tracker that shows live profit & loss.
 
-First, run the development server:
+> Built for personal use. For entertainment only — bet responsibly.
+
+## Features
+
+- **Dashboard** — top model plays, underdog upsets, Ken's actual bets, biggest value, live P/L.
+- **Weekly Slate** — every game with DK/FanDuel spread, total & moneyline (line-shopped), model
+  spread/total/ML picks with confidence %, an underdog upset radar, and the single
+  highest-confidence prop per game. Each pick shows a recommended unit size and a one-tap
+  **Place** button.
+- **Futures & Awards** — Super Bowl, MVP, OPOY, DPOY, OROY, DROY, Coach of the Year, Comeback,
+  win totals and divisions. Ken's real bets and predictions are flagged.
+- **Value Board** — "sharp alerts" for the biggest mispricings, a longshot watch for great prices,
+  and the week's top edges.
+- **Bet Tracker** — configurable unit size (1u = $10 to start), settle bets won/lost/push, and a
+  live record, ROI and net profit/loss. Persists to a local file **and** localStorage.
+- **The Model** — a full write-up of Ken's core models and the weighted engine's factor stack.
+
+## The confidence engine
+
+Each game pick is an explainable stack, not a black box:
+
+1. Power-rating differential (neutral field)
+2. Home-field advantage
+3. Rest / bye differential
+4. QB availability
+5. Divisional dampener
+6. Ken's pass-defense regression signal
+7. Market anchor (vig-removed consensus)
+
+The projected margin becomes a win/cover probability via an NFL-calibrated normal curve, blended
+with the market price. **Edge = model probability − market probability**, and stakes use
+quarter-Kelly (capped at 3u).
+
+## Live odds (free)
+
+The hub ships with a seed slate so it always renders. For **free live lines**, sign up at
+[the-odds-api.com](https://the-odds-api.com/) (free tier ≈ 500 requests/month), then:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
+# paste your key into ODDS_API_KEY
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+DraftKings + FanDuel odds will then override the seed lines automatically.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Getting started
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+# open http://localhost:3000
+```
 
-## Learn More
+Other scripts:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run build        # production build
+npm run format       # Prettier (write)
+npm run format:check # Prettier (check)
+npm run lint         # ESLint
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Tech
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Prettier · lucide-react.
 
-## Deploy on Vercel
+## Weekly workflow
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Update team power ratings / injuries in `src/lib/teams.ts` as results come in.
+2. Swap in the new week's matchups in `src/data/games.ts` (or rely on the live odds feed).
+3. Review the Slate & Value Board, place your picks, and settle last week's on the Tracker.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+Adapted from Ken Barkley's publicly-described 2026 NFL betting methodology.
