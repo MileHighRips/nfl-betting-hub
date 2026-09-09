@@ -4,6 +4,7 @@ import { getCurrentWeek } from '@/lib/schedule';
 import { fetchEspnWeek } from '@/lib/espn';
 import { bestProp, propKey } from '@/lib/props';
 import { getInjuries, getRestDays, type TeamInjuries } from '@/lib/proxies';
+import { getWeatherForGames, classifyWeather } from '@/lib/weather';
 import type { PropMarket } from '@/data/props';
 import type { BookLine, Game, LivePropMap, TeamAbbr } from '@/lib/types';
 
@@ -132,6 +133,24 @@ export async function getGames(week?: number): Promise<GamesResult> {
       getRestDays(targetWeek),
     ]);
     let games = espnGames.map((g) => applyProxies(g, injuries, rest));
+
+    // Live weather forecasts (Open-Meteo) for outdoor games.
+    const weather = await getWeatherForGames(games);
+    games = games.map((g) => {
+      const f = weather[g.id];
+      if (!f) return g;
+      return {
+        ...g,
+        context: {
+          ...g.context,
+          weather: classifyWeather(f),
+          windMph: f.windMph,
+          precip: f.precip,
+          tempF: f.tempF,
+        },
+      };
+    });
+
     if (games.length && key) {
       games = await overlayFanDuel(games, key);
       // Live prop lines are an "additional market" that consumes extra quota,

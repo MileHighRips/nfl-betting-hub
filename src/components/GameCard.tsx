@@ -105,6 +105,15 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
           )}
           {game.context.divisionGame && <Chip>Division</Chip>}
           {game.context.weather === 'dome' && <Chip>Dome</Chip>}
+          {game.context.windMph != null && game.context.windMph >= 12 && (
+            <Chip>Wind {game.context.windMph}mph</Chip>
+          )}
+          {(game.context.weather === 'rain' || game.context.weather === 'snow') && (
+            <Chip>{game.context.weather === 'snow' ? 'Snow' : 'Rain'}</Chip>
+          )}
+          {game.context.weather === 'cold' && game.context.tempF != null && (
+            <Chip>{game.context.tempF}°F</Chip>
+          )}
           {game.context.notes && <Chip>{game.context.notes}</Chip>}
         </div>
       </div>

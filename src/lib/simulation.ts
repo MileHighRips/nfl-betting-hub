@@ -69,11 +69,40 @@ export interface GameSim {
   factors: ModelFactor[];
 }
 
-/** Weather multipliers on scoring and field-goal success. */
-function weatherFactors(w: Game['context']['weather']): { scoring: number; fg: number } {
-  switch (w) {
-    case 'dome':
-      return { scoring: 1.01, fg: 1.02 };
+function clamp(x: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, x));
+}
+
+/**
+ * Weather multipliers on scoring and field-goal success. Uses the live
+ * Open-Meteo forecast magnitude (wind mph / precip / temp) when available,
+ * otherwise the categorical fallback.
+ */
+function weatherFactors(c: Game['context']): { scoring: number; fg: number; label?: string } {
+  if (c.weather === 'dome') return { scoring: 1.01, fg: 1.02 };
+
+  if (c.windMph != null || c.precip != null) {
+    const wind = c.windMph ?? 0;
+    const precip = c.precip ?? 0;
+    const temp = c.tempF ?? 60;
+    let scoring = 1 - clamp((wind - 8) / 40, 0, 0.14);
+    if (precip >= 0.4) scoring -= 0.05;
+    else if (precip >= 0.1) scoring -= 0.02;
+    if (temp <= 25) scoring -= 0.03;
+    let fg = 1 - clamp((wind - 8) / 25, 0, 0.35);
+    if (precip >= 0.4) fg -= 0.06;
+    const label =
+      wind >= 12
+        ? `${wind} mph wind`
+        : precip >= 0.1
+          ? 'precip'
+          : temp <= 28
+            ? `${temp}°F`
+            : undefined;
+    return { scoring: clamp(scoring, 0.82, 1.02), fg: clamp(fg, 0.6, 1.02), label };
+  }
+
+  switch (c.weather) {
     case 'wind':
       return { scoring: 0.92, fg: 0.8 };
     case 'rain':
@@ -175,7 +204,7 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
   }
 
   // Weather suppresses scoring (and kicking, below).
-  const wf = weatherFactors(c.weather);
+  const wf = weatherFactors(c);
   if (wf.scoring !== 1) {
     const before = homeExp + awayExp;
     homeExp *= wf.scoring;
@@ -183,7 +212,7 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
     if (wf.scoring < 1)
       factors.push({
         label: 'Weather',
-        detail: String(c.weather),
+        detail: wf.label ?? String(c.weather),
         impact: homeExp + awayExp - before,
       });
   }

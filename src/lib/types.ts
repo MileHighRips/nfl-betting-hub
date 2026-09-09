@@ -122,6 +122,10 @@ export interface GameContext {
   divisionGame: boolean;
   neutralSite?: boolean;
   weather?: 'dome' | 'clear' | 'wind' | 'rain' | 'snow' | 'cold';
+  /** Live forecast (Open-Meteo) for outdoor games. */
+  windMph?: number;
+  precip?: number; // mm/hr at kickoff
+  tempF?: number;
   notes?: string;
 }
 

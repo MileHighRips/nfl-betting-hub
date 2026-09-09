@@ -78,6 +78,10 @@ const DATA_PROXIES: [string, string][] = [
     'Starter-QB availability drops expected points; ruled-out players are dropped from props.',
   ],
   [
+    'Live Weather (Open-Meteo)',
+    'Hourly wind, precip & temperature at each outdoor stadium at kickoff — real wind suppresses passing, kicking and the total.',
+  ],
+  [
     'Rest & Bye',
     'Actual days of rest per team, derived from prior game dates (short weeks, byes).',
   ],
