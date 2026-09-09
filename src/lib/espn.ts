@@ -5,8 +5,7 @@ import type { BookLine, Game, TeamAbbr } from '@/lib/types';
 
 /**
  * ESPN free scoreboard API — real schedule, real DraftKings odds, and live
- * scores. No API key required. This is the primary data source; FanDuel is
- * overlaid separately when an Odds API key is configured.
+ * scores. No API key required. This is the primary data source.
  */
 
 const DOME_TEAMS: TeamAbbr[] = ['DET', 'MIN', 'NO', 'ATL', 'LV', 'IND', 'ARI', 'HOU', 'DAL'];
@@ -39,6 +38,7 @@ interface EspnOdds {
 interface EspnCompetition {
   competitors: EspnCompetitor[];
   odds?: EspnOdds[];
+  neutralSite?: boolean;
   status?: { type?: { state?: string; completed?: boolean; shortDetail?: string } };
 }
 interface EspnEvent {
@@ -107,7 +107,7 @@ function buildGame(ev: EspnEvent, week: number): Game | null {
     kickoff: ev.date,
     home,
     away,
-    books: [dk, { ...dk, book: 'FanDuel' }],
+    books: [dk],
     prop: {
       player: '',
       team: home,
@@ -126,7 +126,8 @@ function buildGame(ev: EspnEvent, week: number): Game | null {
       divisionGame:
         TEAMS[home].conference === TEAMS[away].conference &&
         TEAMS[home].division === TEAMS[away].division,
-      weather: DOME_TEAMS.includes(home) ? 'dome' : 'clear',
+      neutralSite: comp.neutralSite === true,
+      weather: comp.neutralSite ? 'clear' : DOME_TEAMS.includes(home) ? 'dome' : 'clear',
     },
     status: state,
     statusDetail: comp.status?.type?.shortDetail,

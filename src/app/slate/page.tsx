@@ -31,7 +31,7 @@ export default async function SlatePage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle
           title={`Week ${week} Slate · ${SEASON}`}
-          subtitle={`${games.length} games · ${bestBets} model best-bets · DraftKings & FanDuel`}
+          subtitle={`${games.length} games · ${bestBets} model best-bets · live DraftKings lines`}
           icon={<CalendarRange size={18} />}
         />
         <div className="flex flex-wrap items-center gap-2">

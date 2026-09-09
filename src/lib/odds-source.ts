@@ -5,102 +5,41 @@ import { fetchEspnWeek } from '@/lib/espn';
 import { bestProp, propKey } from '@/lib/props';
 import { getInjuries, getRestDays, type TeamInjuries } from '@/lib/proxies';
 import { getWeatherForGames, classifyWeather } from '@/lib/weather';
-import type { PropMarket } from '@/data/props';
-import type { BookLine, Game, LivePropMap, TeamAbbr } from '@/lib/types';
+import { TEAM_PROPS, type PropMarket } from '@/data/props';
+import type { Game, LivePropMap, TeamAbbr } from '@/lib/types';
 
 /**
  * Source of truth for game lines. Primary feed is ESPN (free, no key): real
- * schedule, real DraftKings odds, and live scores. When ODDS_API_KEY is set we
- * additionally overlay FanDuel (and refresh DraftKings) from The Odds API so
- * you can line-shop across both books. Falls back to the seed slate only if
- * ESPN is unreachable.
+ * schedule, real DraftKings odds, live scores, injuries and weather. When
+ * ODDS_API_KEY + ODDS_API_PROPS are set, exact DraftKings player-prop lines are
+ * pulled in. Falls back to the seed slate only if ESPN is unreachable.
  */
 
 const NAME_TO_ABBR: Record<string, TeamAbbr> = Object.fromEntries(
   Object.values(TEAMS).map((t) => [`${t.city} ${t.name}`, t.abbr]),
 ) as Record<string, TeamAbbr>;
 
-interface OddsApiOutcome {
-  name: string;
-  price: number;
-  point?: number;
-}
-interface OddsApiMarket {
-  key: string;
-  outcomes: OddsApiOutcome[];
-}
-interface OddsApiBookmaker {
-  key: string;
-  markets: OddsApiMarket[];
-}
-interface OddsApiEvent {
-  commence_time: string;
-  home_team: string;
-  away_team: string;
-  bookmakers: OddsApiBookmaker[];
-}
-
-function extractBook(bm: OddsApiBookmaker, homeName: string, awayName: string): BookLine | null {
-  const label = bm.key === 'draftkings' ? 'DraftKings' : bm.key === 'fanduel' ? 'FanDuel' : null;
-  if (!label) return null;
-  const h2h = bm.markets.find((m) => m.key === 'h2h');
-  const spreads = bm.markets.find((m) => m.key === 'spreads');
-  const totals = bm.markets.find((m) => m.key === 'totals');
-  if (!h2h || !spreads || !totals) return null;
-  const spHome = spreads.outcomes.find((o) => o.name === homeName);
-  const spAway = spreads.outcomes.find((o) => o.name === awayName);
-  const over = totals.outcomes.find((o) => o.name === 'Over');
-  const under = totals.outcomes.find((o) => o.name === 'Under');
-  return {
-    book: label,
-    spread: spHome?.point ?? 0,
-    spreadPriceHome: spHome?.price ?? -110,
-    spreadPriceAway: spAway?.price ?? -110,
-    total: over?.point ?? 44.5,
-    overPrice: over?.price ?? -110,
-    underPrice: under?.price ?? -110,
-    moneylineHome: h2h.outcomes.find((o) => o.name === homeName)?.price ?? -110,
-    moneylineAway: h2h.outcomes.find((o) => o.name === awayName)?.price ?? 100,
-  };
-}
-
-/** Overlay real FanDuel (and refresh DK) prices from The Odds API onto ESPN games. */
-async function overlayFanDuel(games: Game[], key: string): Promise<Game[]> {
-  try {
-    const url =
-      `https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/` +
-      `?apiKey=${key}&regions=us&markets=h2h,spreads,totals&oddsFormat=american&bookmakers=draftkings,fanduel`;
-    const res = await fetch(url, { next: { revalidate: 300 } });
-    if (!res.ok) return games;
-    const events = (await res.json()) as OddsApiEvent[];
-    return games.map((g) => {
-      const ev = events.find(
-        (e) => NAME_TO_ABBR[e.home_team] === g.home && NAME_TO_ABBR[e.away_team] === g.away,
-      );
-      if (!ev) return g;
-      const books = ev.bookmakers
-        .map((bm) => extractBook(bm, ev.home_team, ev.away_team))
-        .filter((b): b is BookLine => !!b);
-      if (!books.length) return g;
-      // Keep ESPN DK if the API didn't return DK; ensure both books present.
-      const dk = books.find((b) => b.book === 'DraftKings') ?? g.books[0];
-      const fd = books.find((b) => b.book === 'FanDuel') ?? { ...dk, book: 'FanDuel' as const };
-      return { ...g, books: [dk, fd] };
-    });
-  } catch {
-    return games;
-  }
-}
-
 export interface GamesResult {
   source: 'live' | 'seed';
-  provider: 'ESPN' | 'ESPN + The Odds API' | 'Seed';
+  provider: 'ESPN' | 'ESPN + DK Props' | 'Seed';
   week: number;
   games: Game[];
   error?: string;
 }
 
-/** Apply injury (QB out + ruled-out players) and rest-day proxies to a game. */
+/** Expected-points penalty from key non-QB injuries (WR1/RB1 etc. ruled out). */
+function skillInjuryPenalty(team: TeamAbbr, unavailable: string[] | undefined): number {
+  if (!unavailable?.length) return 0;
+  const out = new Set(unavailable.map((p) => p.toLowerCase()));
+  let penalty = 0;
+  for (const c of TEAM_PROPS[team] ?? []) {
+    if (c.market === 'Pass Yards' || c.market === 'Sacks') continue;
+    if (!out.has(c.player.toLowerCase())) continue;
+    penalty += c.market === 'Receiving Yards' ? 1.1 : c.market === 'Rush Yards' ? 1.0 : 0.6;
+  }
+  return Math.min(2.5, penalty);
+}
+
 function applyProxies(
   g: Game,
   injuries: Partial<Record<TeamAbbr, TeamInjuries>>,
@@ -113,6 +52,8 @@ function applyProxies(
     ...g.context,
     homeQbOut: homeInj?.qbOut || g.context.homeQbOut,
     awayQbOut: awayInj?.qbOut || g.context.awayQbOut,
+    homeInjuryPenalty: skillInjuryPenalty(g.home, homeInj?.unavailable),
+    awayInjuryPenalty: skillInjuryPenalty(g.away, awayInj?.unavailable),
     homeRestDays: rest[g.home] ?? g.context.homeRestDays,
     awayRestDays: rest[g.away] ?? g.context.awayRestDays,
   };
@@ -151,14 +92,10 @@ export async function getGames(week?: number): Promise<GamesResult> {
       };
     });
 
-    if (games.length && key) {
-      games = await overlayFanDuel(games, key);
-      // Live prop lines are an "additional market" that consumes extra quota,
-      // so they are opt-in via ODDS_API_PROPS=true.
-      if (process.env.ODDS_API_PROPS === 'true') {
-        games = await overlayLiveProps(games, key);
-      }
-      return { source: 'live', provider: 'ESPN + The Odds API', week: targetWeek, games };
+    // Live DraftKings player-prop lines (opt-in — consumes extra API quota).
+    if (games.length && key && process.env.ODDS_API_PROPS === 'true') {
+      games = await overlayLiveProps(games, key);
+      return { source: 'live', provider: 'ESPN + DK Props', week: targetWeek, games };
     }
     if (games.length) {
       return { source: 'live', provider: 'ESPN', week: targetWeek, games };
@@ -201,11 +138,9 @@ interface OddsApiEventOdds {
 
 function buildPropMap(ev: OddsApiEventOdds): LivePropMap {
   const map: LivePropMap = {};
-  const bm =
-    ev.bookmakers.find((b) => b.key === 'draftkings') ??
-    ev.bookmakers.find((b) => b.key === 'fanduel');
+  const bm = ev.bookmakers.find((b) => b.key === 'draftkings');
   if (!bm) return map;
-  const book = bm.key === 'fanduel' ? 'FanDuel' : 'DraftKings';
+  const book = 'DraftKings' as const;
   for (const m of bm.markets) {
     const market = PROP_MARKET_MAP[m.key];
     if (!market) continue;
@@ -246,7 +181,7 @@ async function overlayLiveProps(games: Game[], key: string): Promise<Game[]> {
         if (!ev) return g;
         const url =
           `https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events/${ev.id}/odds` +
-          `?apiKey=${key}&regions=us&markets=${markets}&bookmakers=draftkings,fanduel&oddsFormat=american`;
+          `?apiKey=${key}&regions=us&markets=${markets}&bookmakers=draftkings&oddsFormat=american`;
         const res = await fetch(url, { next: { revalidate: 300 } });
         if (!res.ok) return g;
         const data = (await res.json()) as OddsApiEventOdds;

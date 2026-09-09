@@ -41,9 +41,7 @@ export function OddsBadge({ price, book }: { price: number; book?: string }) {
     <span className="mono inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs font-semibold text-zinc-200">
       {formatOdds(price)}
       {book && (
-        <span className="text-[10px] text-zinc-500">
-          {book === 'DraftKings' ? 'DK' : book === 'FanDuel' ? 'FD' : book}
-        </span>
+        <span className="text-[10px] text-zinc-500">{book === 'DraftKings' ? 'DK' : book}</span>
       )}
     </span>
   );

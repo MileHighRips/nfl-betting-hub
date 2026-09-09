@@ -40,49 +40,46 @@ use one of these:
 ## Features
 
 - **Dashboard** — top model plays, underdog upsets, Ken's actual bets, biggest value, live P/L.
-- **Weekly Slate** — every game with DK/FanDuel spread, total & moneyline (line-shopped), model
-  spread/total/ML picks with confidence %, an underdog upset radar, and the single
+- **Weekly Slate** — every game with live **DraftKings** spread, total & moneyline, drive-level
+  model picks with confidence %, an underdog upset radar, live weather/injury flags, and the single
   highest-confidence prop per game. Each pick shows a recommended unit size and a one-tap
   **Place** button.
+- **All Picks** — every value bet across the slate (and Ken's futures) with win %, price and unit
+  size, filterable by type and confidence.
 - **Futures & Awards** — Super Bowl, MVP, OPOY, DPOY, OROY, DROY, Coach of the Year, Comeback,
   win totals and divisions. Ken's real bets and predictions are flagged.
 - **Value Board** — "sharp alerts" for the biggest mispricings, a longshot watch for great prices,
   and the week's top edges.
 - **Bet Tracker** — configurable unit size (1u = $10 to start), settle bets won/lost/push, and a
   live record, ROI and net profit/loss. Persists to a local file **and** localStorage.
-- **The Model** — a full write-up of Ken's core models and the weighted engine's factor stack.
+- **The Model** — a full write-up of the drive-level engine, live data proxies, and Ken's models.
 
-## The confidence engine
+## The engine
 
-Each game pick is an explainable stack, not a black box:
+Every game is played out **12,000 times, drive by drive**. Team scoring is built from first
+principles — offensive efficiency vs the opponent's defense, scaled by pace — so the **total is
+modeled, not pinned to the market** and real Over/Under value appears. Each possession resolves to
+a TD/FG/none, which reproduces realistic scores and push-aware key numbers.
 
-1. Power-rating differential (neutral field)
-2. Home-field advantage
-3. Rest / bye differential
-4. QB availability
-5. Divisional dampener
-6. Ken's pass-defense regression signal
-7. Market anchor (vig-removed consensus)
-
-The projected margin becomes a win/cover probability via an NFL-calibrated normal curve, blended
-with the market price. **Edge = model probability − market probability**, and stakes use
-quarter-Kelly (capped at 3u).
+Factor stack: efficiency matchup · team-specific home field · rest/bye · travel & body clock ·
+**live weather (wind/precip/temp)** · **injuries (QB + skill players out)** · pace · divisional
+tightening · **in-season Elo learning** from real results. Edge = model probability − vig-free
+market probability; stakes are fractional-Kelly, **hard-capped at 1 unit**.
 
 ## Live data (free, no key)
 
-The primary feed is **ESPN's free API** — real schedule, real **DraftKings** odds, and live
-scores/status for every week, with **no key required**. The current week is detected from the
-date, and completed results feed an in-season Elo-style model that sharpens the ratings each week.
+The entire app runs on **free data, no key required**. From ESPN: real schedule, live DraftKings
+odds, scores/status, and injuries. From Open-Meteo: live wind/precip/temperature at each outdoor
+stadium. Rest/bye is derived from the schedule, and completed results feed an in-season Elo model
+that re-rates every team weekly.
 
-To also line-shop **FanDuel**, add a free key from
-[the-odds-api.com](https://the-odds-api.com/) (free tier ≈ 500 requests/month):
+Optionally, add a free key from [the-odds-api.com](https://the-odds-api.com/) to pull exact posted
+**DraftKings player-prop lines**:
 
 ```bash
 cp .env.example .env.local
-# paste your key into ODDS_API_KEY
+# paste your key into ODDS_API_KEY and set ODDS_API_PROPS=true
 ```
-
-FanDuel prices then overlay alongside DraftKings automatically.
 
 ## Getting started
 

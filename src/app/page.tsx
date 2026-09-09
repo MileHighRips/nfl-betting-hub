@@ -49,9 +49,9 @@ export default async function DashboardPage() {
             Barkley&rsquo;s models.
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-            Weekly lines from DraftKings &amp; FanDuel, a transparent weighted confidence engine,
-            every futures market, a value board for out-of-whack prices, and a bankroll tracker so
-            you can watch profit &amp; loss in real time.
+            Live DraftKings lines, a drive-level Monte-Carlo model, every futures market, a value
+            board for out-of-whack prices, and a bankroll tracker so you can watch profit &amp; loss
+            in real time.
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
             <Link

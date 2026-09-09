@@ -59,8 +59,7 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
   const home = TEAMS[game.home];
   const away = TEAMS[game.away];
   const matchup = `${away.abbr} @ ${home.abbr}`;
-  const dk = game.books.find((b) => b.book === 'DraftKings')!;
-  const fd = game.books.find((b) => b.book === 'FanDuel')!;
+  const dk = game.books.find((b) => b.book === 'DraftKings') ?? game.books[0];
 
   return (
     <div className="card card-hover overflow-hidden">
@@ -118,19 +117,14 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
         </div>
       </div>
 
-      {/* Line shopping table */}
+      {/* DraftKings line */}
       <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-x-3 gap-y-1 px-4 py-3 text-xs">
         <div />
         <div className="text-center font-semibold text-zinc-500">Spread</div>
         <div className="text-center font-semibold text-zinc-500">Total</div>
         <div className="text-center font-semibold text-zinc-500">Moneyline</div>
 
-        {[
-          { name: 'DK', b: dk },
-          { name: 'FD', b: fd },
-        ].map(({ name, b }) => (
-          <FragmentRow key={name} name={name} b={b} awayAbbr={away.abbr} homeAbbr={home.abbr} />
-        ))}
+        <FragmentRow name="DK" b={dk} awayAbbr={away.abbr} homeAbbr={home.abbr} />
       </div>
 
       {/* Simulation projection */}

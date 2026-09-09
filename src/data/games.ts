@@ -389,19 +389,7 @@ function makeBooks(s: Seed): BookLine[] {
     moneylineHome: s.mlHome,
     moneylineAway: s.mlAway,
   };
-  // FanDuel: slightly shaded alt to create real line-shopping opportunities.
-  const fd: BookLine = {
-    book: 'FanDuel',
-    spread: s.spread,
-    spreadPriceHome: -108,
-    spreadPriceAway: -112,
-    total: s.total + 0.5,
-    overPrice: -114,
-    underPrice: -106,
-    moneylineHome: Math.round(s.mlHome + (s.mlHome < 0 ? 6 : -6)),
-    moneylineAway: Math.round(s.mlAway + (s.mlAway < 0 ? -6 : 8)),
-  };
-  return [dk, fd];
+  return [dk];
 }
 
 export const WEEK1_GAMES: Game[] = SEEDS.map((s, i) => ({

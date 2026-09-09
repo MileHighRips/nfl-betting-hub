@@ -119,6 +119,9 @@ export interface GameContext {
   awayRestDays: number;
   homeQbOut?: boolean;
   awayQbOut?: boolean;
+  /** Expected-points penalty from key non-QB injuries (WR1/RB1 out, etc.). */
+  homeInjuryPenalty?: number;
+  awayInjuryPenalty?: number;
   divisionGame: boolean;
   neutralSite?: boolean;
   weather?: 'dome' | 'clear' | 'wind' | 'rain' | 'snow' | 'cold';

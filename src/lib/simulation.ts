@@ -195,6 +195,24 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
     });
   }
 
+  // Key skill-player injuries (WR1/RB1 out, etc.) reduce that offense.
+  if (c.homeInjuryPenalty) {
+    homeExp -= c.homeInjuryPenalty;
+    factors.push({
+      label: 'Injuries (Home)',
+      detail: `Key skill players out (−${c.homeInjuryPenalty.toFixed(1)})`,
+      impact: -c.homeInjuryPenalty,
+    });
+  }
+  if (c.awayInjuryPenalty) {
+    awayExp -= c.awayInjuryPenalty;
+    factors.push({
+      label: 'Injuries (Away)',
+      detail: `Key skill players out (−${c.awayInjuryPenalty.toFixed(1)})`,
+      impact: c.awayInjuryPenalty,
+    });
+  }
+
   // Divisional familiarity tightens the margin.
   if (c.divisionGame) {
     const mid = (homeExp + awayExp) / 2;
