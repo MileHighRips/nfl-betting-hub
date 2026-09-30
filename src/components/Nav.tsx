@@ -10,6 +10,9 @@ import {
   ClipboardList,
   BrainCircuit,
   ListChecks,
+  Coins,
+  Skull,
+  Zap,
 } from 'lucide-react';
 import { useBankroll } from '@/lib/store';
 import { fmtMoney } from '@/lib/format';
@@ -17,9 +20,12 @@ import clsx from 'clsx';
 
 const LINKS = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/bet-now', label: 'Bet Now', icon: Zap },
   { href: '/slate', label: 'Weekly Slate', icon: CalendarRange },
   { href: '/picks', label: 'All Picks', icon: ListChecks },
+  { href: '/true-units', label: 'True Units', icon: Coins },
   { href: '/futures', label: 'Futures', icon: Trophy },
+  { href: '/eliminator', label: 'Eliminator', icon: Skull },
   { href: '/value', label: 'Value Board', icon: Flame },
   { href: '/tracker', label: 'Bet Tracker', icon: ClipboardList },
   { href: '/methodology', label: 'The Model', icon: BrainCircuit },

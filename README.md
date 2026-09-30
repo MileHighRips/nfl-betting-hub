@@ -1,11 +1,37 @@
 # 🏈 LockyLines — NFL Football Sports Betting Hub
 
 A sleek, mathematically-grounded NFL betting hub built on **Ken Barkley's** 2026 models. It gives
-you each week's lines from **DraftKings & FanDuel**, a transparent weighted confidence engine,
+you each week's lines from **DraftKings**, a transparent weighted confidence engine,
 every futures market, a value board for out-of-whack prices, one high-confidence player prop per
 game, and a bankroll tracker that shows live profit & loss.
 
 > Built for personal use. For entertainment only — bet responsibly.
+
+## ⚡ Quickstart (clone & run)
+
+All live feeds (DraftKings, ESPN, Open-Meteo weather, news RSS) are **keyless public endpoints**,
+so there's nothing to configure — clone, install, run:
+
+```bash
+git clone https://github.com/MileHighRips/nfl-betting-hub.git
+cd nfl-betting-hub
+npm install
+npm run dev          # open http://localhost:3000
+```
+
+Each install keeps its **own** bankroll: placed bets, unit size and P/L are stored locally in
+`data/store/` (git-ignored) and mirrored to your browser — so a second person who clones gets a
+clean, independent tracker. The shared model, picks and the committed ML artifacts
+(`data/store/ml-model.json`, `data/store/props-model.json`) come with the clone, so the full
+calibrated model works immediately. No API keys, no accounts, no database.
+
+_Optional — retrain the ML artifacts yourself (needs Python 3.12):_
+
+```bash
+pip install -r ml/requirements.txt
+python ml/build_model.py     # 15-season game-lines model
+python ml/build_props.py      # anytime-TD calibration + prop sigmas
+```
 
 ## 🔗 Links & opening on your phone (Safari)
 
@@ -31,8 +57,10 @@ use one of these:
    vercel --prod     # gives you the public https URL for Safari
    ```
 
-   Add your `ODDS_API_KEY` (and optional `ODDS_API_PROPS`) in the Vercel project's
-   Environment Variables to enable FanDuel + live prop lines in production.
+   No environment variables are required — every data feed is a keyless public endpoint.
+   Note: Vercel's filesystem is read-only, so the file-backed bankroll/locks/CLV writes only
+   persist when self-hosting on a writable host (or running locally). For a couple of users,
+   cloning and running locally is the simplest path.
 
 > Note: this app uses server rendering + API routes, so plain **GitHub Pages won't run it** —
 > Vercel (or any Node host) is the right target for a live URL.

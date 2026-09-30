@@ -104,3 +104,223 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Print document is hidden on screen; the interactive UI is hidden in print. */
+.print-doc {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #1b1c20 !important;
+    font-family: 'Helvetica Neue', Arial, sans-serif !important;
+  }
+
+  /* Hide the app chrome and the on-screen list — show only the print document. */
+  header,
+  footer,
+  nav,
+  .screen-only {
+    display: none !important;
+  }
+
+  .print-doc {
+    display: block !important;
+    color: #1b1c20;
+  }
+
+  .print-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    border-top: 6px solid #b0872b;
+    padding-top: 14px;
+  }
+
+  .print-brand {
+    color: #b0872b;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+  }
+
+  .print-head h1 {
+    margin: 6px 0 3px;
+    color: #17181c;
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+
+  .print-head p {
+    margin: 0;
+    color: #5b5e66;
+    font-size: 10.5px;
+  }
+
+  .print-meta {
+    text-align: right;
+    color: #7a7d85;
+    font-size: 9px;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .print-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin: 14px 0 4px;
+  }
+
+  .print-summary > div {
+    border: 1px solid #e2e4e9;
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
+  .print-summary span {
+    display: block;
+    color: #7a7d85;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .print-summary strong {
+    display: block;
+    margin-top: 3px;
+    color: #17181c;
+    font-size: 15px;
+    font-weight: 800;
+  }
+
+  .print-game {
+    margin-top: 16px;
+    break-inside: avoid;
+  }
+
+  .print-game-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 2px solid #17181c;
+    padding-bottom: 4px;
+    margin-bottom: 6px;
+  }
+
+  .print-game-title {
+    color: #17181c;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+
+  .print-game-time {
+    color: #7a7d85;
+    font-size: 9.5px;
+    font-weight: 600;
+  }
+
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+  }
+
+  .print-table thead th {
+    color: #8a8d95;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 3px 6px;
+    border-bottom: 1px solid #e2e4e9;
+  }
+
+  .print-table tbody td {
+    padding: 5px 6px;
+    border-bottom: 1px solid #eef0f3;
+    color: #26282d;
+    vertical-align: middle;
+  }
+
+  .print-table tbody tr:nth-child(even) td {
+    background: #f7f8fa;
+  }
+
+  .print-table .c-type {
+    width: 74px;
+    font-weight: 700;
+    color: #4b4e56;
+  }
+
+  .print-table .c-sel {
+    font-weight: 700;
+    color: #14151a;
+  }
+
+  .print-table .c-num {
+    width: 52px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .print-table .c-odds {
+    width: 96px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #4b4e56;
+  }
+
+  .print-table .c-edge {
+    color: #1f7a4d;
+    font-weight: 700;
+  }
+
+  .print-parlay {
+    margin: 6px 0 10px;
+    padding: 6px 8px;
+    border: 1px solid #e2e4e9;
+    border-left: 3px solid #b0872b;
+    border-radius: 4px;
+    break-inside: avoid;
+  }
+
+  .print-parlay-head {
+    margin-bottom: 3px;
+    color: #17181c;
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  .print-parlay-leg {
+    padding-left: 10px;
+    color: #4b4e56;
+    font-size: 9.5px;
+  }
+
+  .print-foot {
+    margin-top: 20px;
+    padding-top: 8px;
+    border-top: 1px solid #e2e4e9;
+    color: #9a9da4;
+    font-size: 8.5px;
+    text-align: center;
+  }
+}
+

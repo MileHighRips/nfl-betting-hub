@@ -45,7 +45,7 @@ async function fetchForecast(
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
     `&hourly=precipitation,wind_speed_10m,temperature_2m&wind_speed_unit=mph` +
     `&temperature_unit=fahrenheit&timezone=UTC&forecast_days=16`;
-  const res = await fetch(url, { next: { revalidate: 1800 } });
+  const res = await fetch(url, { next: { revalidate: 900 } });
   if (!res.ok) return null;
   const data = (await res.json()) as OpenMeteo;
   const h = data.hourly;

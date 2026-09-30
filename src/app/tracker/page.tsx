@@ -1,19 +1,70 @@
 'use client';
 
-import { useState } from 'react';
-import { ClipboardList, Check, X, Minus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { ClipboardList, Check, X, Minus, Trash2, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
-import { useBankroll } from '@/lib/store';
+import { useBankroll, computeStats } from '@/lib/store';
 import { fmtMoney, fmtSignedPct } from '@/lib/format';
 import { formatOdds, americanToProfit } from '@/lib/odds';
 import { SectionTitle, Chip } from '@/components/atoms';
 import type { PlacedBet } from '@/lib/types';
+import type { LiveStatus } from '@/lib/live-status';
+
+/** Week a bet belongs to, from its game id or market label (undefined for futures). */
+function betWeek(b: PlacedBet): number | undefined {
+  const fromId = b.gameId?.match(/-w(\d+)-/);
+  if (fromId) return Number(fromId[1]);
+  const fromMarket = b.market.match(/week\s*(\d+)/i);
+  return fromMarket ? Number(fromMarket[1]) : undefined;
+}
 
 export default function TrackerPage() {
-  const { bets, stats, unitSize, setUnitSize, updateStatus, removeBet } = useBankroll();
+  const { bets, stats, unitSize, setUnitSize, updateStatus, removeBet, refresh } = useBankroll();
   const [filter, setFilter] = useState<'all' | PlacedBet['status']>('all');
+  const [weekFilter, setWeekFilter] = useState<string>('all');
+  const [statuses, setStatuses] = useState<Record<string, LiveStatus>>({});
 
-  const shown = bets.filter((b) => (filter === 'all' ? true : b.status === filter));
+  const fetchStatuses = useCallback(() => {
+    fetch('/api/game-status')
+      .then((r) => r.json())
+      .then((d: { statuses: Record<string, LiveStatus> }) => setStatuses(d.statuses ?? {}))
+      .catch(() => {});
+  }, []);
+
+  // Poll live scores and re-grade every 30s so results update in real time.
+  useEffect(() => {
+    fetchStatuses();
+    const id = setInterval(() => {
+      fetchStatuses();
+      refresh();
+    }, 30000);
+    return () => clearInterval(id);
+  }, [fetchStatuses, refresh]);
+
+  const refreshAll = () => {
+    refresh();
+    fetchStatuses();
+  };
+
+  const weekSet = new Set<number>();
+  let hasFutures = false;
+  for (const b of bets) {
+    const w = betWeek(b);
+    if (w === undefined) hasFutures = true;
+    else weekSet.add(w);
+  }
+  const weeks = [...weekSet].sort((a, b) => a - b);
+
+  const weekBets = bets.filter((b) => {
+    if (weekFilter === 'all') return true;
+    const w = betWeek(b);
+    if (weekFilter === 'futures') return w === undefined;
+    return w === Number(weekFilter);
+  });
+  // KPIs follow the week selection; the status buttons only narrow the list.
+  const viewStats = weekFilter === 'all' ? stats : computeStats(weekBets, unitSize);
+
+  const shown = weekBets.filter((b) => (filter === 'all' ? true : b.status === filter));
 
   return (
     <div className="space-y-6">
@@ -27,20 +78,20 @@ export default function TrackerPage() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Net P/L"
-          value={fmtMoney(stats.profit)}
-          tone={stats.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}
-          sub={`ROI ${fmtSignedPct(stats.roi)}`}
+          value={fmtMoney(viewStats.profit)}
+          tone={viewStats.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}
+          sub={`ROI ${fmtSignedPct(viewStats.roi)}`}
         />
-        <StatCard label="Record" value={stats.record} sub={`${stats.placed} placed`} />
+        <StatCard label="Record" value={viewStats.record} sub={`${viewStats.placed} placed`} />
         <StatCard
           label="Staked (settled)"
-          value={fmtMoney(stats.staked)}
-          sub={`${stats.won + stats.lost + stats.push} settled`}
+          value={fmtMoney(viewStats.staked)}
+          sub={`${viewStats.won + viewStats.lost + viewStats.push} settled`}
         />
         <StatCard
           label="Pending Risk"
-          value={fmtMoney(stats.pendingRisk)}
-          sub={`${stats.pending} open`}
+          value={fmtMoney(viewStats.pendingRisk)}
+          sub={`${viewStats.pending} open`}
         />
       </div>
 
@@ -80,7 +131,7 @@ export default function TrackerPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {(['all', 'pending', 'won', 'lost', 'push'] as const).map((f) => (
           <button
             key={f}
@@ -95,7 +146,34 @@ export default function TrackerPage() {
             {f}
           </button>
         ))}
+        {(weeks.length > 0 || hasFutures) && (
+          <label className="ml-auto flex items-center gap-2 text-xs text-zinc-400">
+            Week
+            <select
+              value={weekFilter}
+              onChange={(e) => setWeekFilter(e.target.value)}
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-white outline-none focus:border-emerald-500/60"
+            >
+              <option value="all">All weeks</option>
+              {weeks.map((w) => (
+                <option key={w} value={w}>
+                  Week {w}
+                </option>
+              ))}
+              {hasFutures && <option value="futures">Futures</option>}
+            </select>
+          </label>
+        )}
       </div>
+
+      <button
+        type="button"
+        onClick={refreshAll}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-emerald-500/60 hover:text-white"
+      >
+        <RefreshCw size={14} />
+        Refresh Results
+      </button>
 
       {/* Bet list */}
       {shown.length === 0 ? (
@@ -106,7 +184,13 @@ export default function TrackerPage() {
       ) : (
         <div className="space-y-2">
           {shown.map((b) => (
-            <BetRow key={b.id} bet={b} onStatus={updateStatus} onRemove={removeBet} />
+            <BetRow
+              key={b.id}
+              bet={b}
+              status={b.gameId ? statuses[b.gameId] : undefined}
+              onStatus={updateStatus}
+              onRemove={removeBet}
+            />
           ))}
         </div>
       )}
@@ -136,16 +220,19 @@ function StatCard({
 
 function BetRow({
   bet,
+  status,
   onStatus,
   onRemove,
 }: {
   bet: PlacedBet;
+  status?: LiveStatus;
   onStatus: (id: string, s: PlacedBet['status']) => void;
   onRemove: (id: string) => void;
 }) {
   const risk = bet.stakeUnits * bet.unitSize;
   const toWin = risk * americanToProfit(bet.price);
   const result = bet.status === 'won' ? toWin : bet.status === 'lost' ? -risk : 0;
+  const live = status && status.state !== 'pre';
 
   return (
     <div className="card flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
@@ -153,6 +240,20 @@ function BetRow({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-white">{bet.description}</span>
           {bet.source === 'ken' && <Chip variant="ken">Ken</Chip>}
+          {live && (
+            <span
+              className={clsx(
+                'chip',
+                status!.state === 'in'
+                  ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                  : 'border-zinc-500/40 bg-zinc-500/10 text-zinc-300',
+              )}
+            >
+              {status!.state === 'in' ? 'LIVE' : 'Final'} {status!.away} {status!.awayScore}–
+              {status!.homeScore} {status!.home}
+              {status!.state === 'in' && status!.detail ? ` · ${status!.detail}` : ''}
+            </span>
+          )}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
           <span>{bet.market}</span>

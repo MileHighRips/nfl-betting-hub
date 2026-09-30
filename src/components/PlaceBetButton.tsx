@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { Check, Plus } from 'lucide-react';
 import clsx from 'clsx';
 import { useBankroll } from '@/lib/store';
+import { fmtMoney } from '@/lib/format';
+import type { PickType } from '@/lib/types';
 
 interface Props {
   description: string;
@@ -12,6 +14,12 @@ interface Props {
   stakeUnits: number;
   confidence?: number;
   source?: 'model' | 'ken' | 'manual';
+  gameId?: string;
+  pickType?: PickType;
+  side?: string;
+  line?: number;
+  player?: string;
+  propMarket?: string;
   compact?: boolean;
 }
 
@@ -23,14 +31,35 @@ export default function PlaceBetButton({
   confidence,
   source = 'model',
   compact,
+  gameId,
+  pickType,
+  side,
+  line,
+  player,
+  propMarket,
 }: Props) {
-  const { placeBet } = useBankroll();
+  const { placeBet, unitSize } = useBankroll();
   const [done, setDone] = useState(false);
+
+  const dollars = stakeUnits * unitSize;
 
   return (
     <button
       onClick={() => {
-        placeBet({ description, market, price, stakeUnits, confidence, source });
+        placeBet({
+          description,
+          market,
+          price,
+          stakeUnits,
+          confidence,
+          source,
+          gameId,
+          pickType,
+          side,
+          line,
+          player,
+          propMarket,
+        });
         setDone(true);
         setTimeout(() => setDone(false), 1600);
       }}
@@ -43,7 +72,14 @@ export default function PlaceBetButton({
       )}
     >
       {done ? <Check size={14} /> : <Plus size={14} />}
-      {done ? 'Tracked' : `Place ${stakeUnits}u`}
+      {done ? (
+        'Tracked'
+      ) : (
+        <span className="flex flex-col items-start leading-tight">
+          <span>Place {stakeUnits}u</span>
+          <span className="text-[10px] font-normal text-zinc-400">{fmtMoney(dollars)}</span>
+        </span>
+      )}
     </button>
   );
 }

@@ -3,6 +3,7 @@ import { TEAMS } from './teams';
 import { LEAGUE_AVG_PPG, homeFieldEdge, teamProfile } from './ratings';
 import { QB_DROPOFF, DEFAULT_QB_DROPOFF } from '@/data/ratings2026';
 import { travelEffect } from './geo';
+import { eloMargin } from './elo';
 import type { Ratings } from './form';
 import type { TeamAbbr } from './types';
 
@@ -33,6 +34,10 @@ export const SIM_CONFIG = {
   divisionTighten: 0.93,
   fgBaseRate: 0.155,
 };
+
+// Weight on the independent Elo margin when ensembling with the drive-sim margin.
+// Tuned on the walk-forward backtest; keep modest so neither model dominates.
+const ELO_BLEND = 0.35;
 
 function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -131,11 +136,9 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
   const c = game.context;
   const factors: ModelFactor[] = [];
 
-  // In-season form as a net delta from the preseason anchor.
-  const formHome = ratings ? ratings[home] - TEAMS[home].rating : 0;
-  const formAway = ratings ? ratings[away] - TEAMS[away].rating : 0;
-  const pH = teamProfile(home, formHome);
-  const pA = teamProfile(away, formAway);
+  // In-season form as separate offensive/defensive deltas from the anchor.
+  const pH = teamProfile(home, ratings?.off[home] ?? 0, ratings?.def[home] ?? 0);
+  const pA = teamProfile(away, ratings?.off[away] ?? 0, ratings?.def[away] ?? 0);
 
   // Expected points from the efficiency matchup.
   let homeExp = LEAGUE_AVG_PPG + pH.offense + pA.defense;
@@ -165,6 +168,28 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
       label: 'Rest',
       detail: `${c.homeRestDays}d vs ${c.awayRestDays}d`,
       impact: restAdj,
+    });
+  }
+
+  // Absolute short-week fatigue / off-bye freshness (beyond the relative gap).
+  // Short weeks (<=4 days, e.g. Thursday) suppress a team; off a bye (>=13) lifts.
+  const freshness = (rest: number) => (rest > 0 && rest <= 4 ? -0.6 : rest >= 13 ? 0.4 : 0);
+  const homeFresh = freshness(c.homeRestDays);
+  const awayFresh = freshness(c.awayRestDays);
+  if (homeFresh) {
+    homeExp += homeFresh;
+    factors.push({
+      label: homeFresh > 0 ? 'Off Bye (Home)' : 'Short Week (Home)',
+      detail: `${c.homeRestDays}d rest`,
+      impact: homeFresh,
+    });
+  }
+  if (awayFresh) {
+    awayExp += awayFresh;
+    factors.push({
+      label: awayFresh > 0 ? 'Off Bye (Away)' : 'Short Week (Away)',
+      detail: `${c.awayRestDays}d rest`,
+      impact: awayFresh,
     });
   }
 
@@ -248,6 +273,22 @@ export function simulateGame(game: Game, ratings?: Ratings): GameSim {
         label: 'Pace',
         detail: `${paceFactor.toFixed(2)}× tempo`,
         impact: total * (paceFactor - 1),
+      });
+    }
+  }
+
+  // Ensemble: pull the margin toward the independent Elo estimate (totals untouched).
+  if (ratings?.elo) {
+    const modelMargin = homeExp - awayExp;
+    const eloM = eloMargin(ratings.elo, home, away, c.neutralSite ? 0 : hfa);
+    const nudge = ELO_BLEND * (eloM - modelMargin);
+    homeExp += nudge / 2;
+    awayExp -= nudge / 2;
+    if (Math.abs(nudge) >= 0.1) {
+      factors.push({
+        label: 'Elo Ensemble',
+        detail: `Elo margin ${eloM >= 0 ? '+' : ''}${eloM.toFixed(1)}`,
+        impact: nudge,
       });
     }
   }

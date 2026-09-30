@@ -49,6 +49,21 @@ export function kellyUnits(modelProb: number, odds: number, fraction = 0.25): nu
   return Math.max(0, Math.min(1, Number(units.toFixed(2))));
 }
 
+/**
+ * "True" fractional-Kelly stake in units with no artificial 1-unit cap.
+ * Same quarter-Kelly math as {@link kellyUnits}, but sized purely on the
+ * model's conviction so bigger edges earn bigger stakes. Held to a sane 5u
+ * ceiling to guard against runaway sizing on extreme longshots.
+ */
+export function sharpUnits(modelProb: number, odds: number, fraction = 0.25, cap = 5): number {
+  const b = americanToProfit(odds);
+  const q = 1 - modelProb;
+  const kelly = (b * modelProb - q) / b;
+  if (kelly <= 0) return 0;
+  const units = kelly * fraction * 100;
+  return Math.max(0, Math.min(cap, Number(units.toFixed(2))));
+}
+
 /** Convert a probability edge into a 0-100 display confidence score. */
 export function confidenceScore(modelProb: number, edge: number): number {
   // Blend absolute model conviction with the size of the market disagreement.

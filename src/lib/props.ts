@@ -1,7 +1,8 @@
 import { TEAMS } from './teams';
 import { staticDefense } from './ratings';
-import { TEAM_PROPS, type PropCandidate, type PropMarket } from '@/data/props';
+import { type PropCandidate, type PropMarket } from '@/data/props';
 import { americanToProb, confidenceScore, normalCdf } from './odds';
+import { getPropResidualSds } from './props-model';
 import type { BookLine, Game, LivePropMap, PlayerProp, TeamAbbr } from './types';
 
 /**
@@ -23,6 +24,11 @@ const MARKET_SIGMA: Record<PropMarket, number> = {
   Receptions: 1.9,
   Sacks: 0.85,
 };
+
+/** Real 15-season residual SD when available, else the seed constant. */
+function marketSigma(market: PropMarket): number {
+  return getPropResidualSds()[market] ?? MARKET_SIGMA[market];
+}
 
 export function propKey(player: string, market: PropMarket): string {
   return `${player.toLowerCase()}|${market}`;
@@ -86,7 +92,7 @@ function evaluate(
   env: Env,
   live: LivePropMap | undefined,
 ): EvaluatedProp {
-  const sigma = MARKET_SIGMA[c.market];
+  const sigma = marketSigma(c.market);
   const proj = projectProp(c, env);
   const liveLine = live?.[propKey(c.player, c.market)];
   const line = liveLine ? liveLine.line : c.baseline;
@@ -145,6 +151,53 @@ export interface PropSimEnv {
 
 /** Pick the single best prop (Over or Under) across both teams for a game. */
 export function bestProp(game: Game, live?: LivePropMap, sim?: PropSimEnv): PlayerProp {
+  const candidates = evaluateGameProps(game, live, sim);
+  if (!candidates.length) {
+    return {
+      player: `${TEAMS[game.home].name} skill`,
+      team: game.home,
+      market: 'Receiving Yards',
+      line: 55.5,
+      side: 'Over',
+      price: -114,
+      book: 'DraftKings',
+      projection: 55.5,
+      confidence: 50,
+      rationale: 'No live prop market posted for this game yet.',
+    };
+  }
+  candidates.sort((a, b) => b.prop.confidence - a.prop.confidence || Math.abs(b.z) - Math.abs(a.z));
+  return candidates[0].prop;
+}
+
+/**
+ * Every genuinely +EV prop in a game (edge over the market), highest edge first,
+ * one per player. Feeds the "multiple props when there's value" slate.
+ */
+export function bestProps(
+  game: Game,
+  live?: LivePropMap,
+  sim?: PropSimEnv,
+  opts: { minEdge?: number; limit?: number } = {},
+): EvaluatedProp[] {
+  const { minEdge = 0.02, limit = 4 } = opts;
+  const evald = evaluateGameProps(game, live, sim)
+    .filter((e) => e.edge >= minEdge)
+    .sort((a, b) => b.edge - a.edge);
+  const seen = new Set<string>();
+  const out: EvaluatedProp[] = [];
+  for (const e of evald) {
+    const key = e.prop.player.toLowerCase();
+    if (seen.has(key)) continue; // one prop per player
+    seen.add(key);
+    out.push(e);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Evaluate every prop candidate in a game against the simulated environment. */
+function evaluateGameProps(game: Game, live?: LivePropMap, sim?: PropSimEnv): EvaluatedProp[] {
   const candidates: EvaluatedProp[] = [];
 
   let homeImplied: number;
@@ -171,6 +224,10 @@ export function bestProp(game: Game, live?: LivePropMap, sim?: PropSimEnv): Play
 
   const out = new Set((game.outPlayers ?? []).map((p) => p.toLowerCase()));
 
+  // Only the live DK player pool (current rosters). No stale seed fallback — a
+  // missing feed means no prop, never a wrong-team player.
+  const liveCands = game.livePropCandidates?.length ? game.livePropCandidates : undefined;
+
   for (const [team, margin, implied, opp] of perTeam) {
     const env: Env = {
       teamMargin: margin,
@@ -178,27 +235,16 @@ export function bestProp(game: Game, live?: LivePropMap, sim?: PropSimEnv): Play
       teamImplied: implied,
       oppDefense: staticDefense(opp),
     };
-    for (const c of TEAM_PROPS[team] ?? []) {
+    const teamCands: PropCandidate[] = liveCands
+      ? liveCands
+          .filter((c) => c.team === team)
+          .map((c) => ({ player: c.player, market: c.market as PropMarket, baseline: c.line }))
+      : [];
+    for (const c of teamCands) {
       if (out.has(c.player.toLowerCase())) continue; // ruled out — never recommend
       candidates.push(evaluate(c, team, env, live));
     }
   }
 
-  if (!candidates.length) {
-    return {
-      player: `${TEAMS[game.home].name} skill`,
-      team: game.home,
-      market: 'Receiving Yards',
-      line: 55.5,
-      side: 'Over',
-      price: -114,
-      book: 'DraftKings',
-      projection: 58,
-      confidence: 55,
-      rationale: 'Fallback projection.',
-    };
-  }
-
-  candidates.sort((a, b) => b.prop.confidence - a.prop.confidence || Math.abs(b.z) - Math.abs(a.z));
-  return candidates[0].prop;
+  return candidates;
 }

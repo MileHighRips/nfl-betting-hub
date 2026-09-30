@@ -4,22 +4,22 @@ import { useState } from 'react';
 import { Star, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import { FUTURES, FUTURES_MARKETS } from '@/data/futures';
-import type { FuturesMarket } from '@/lib/types';
+import type { FuturesBet, FuturesMarket } from '@/lib/types';
 import { formatOdds } from '@/lib/odds';
 import { Chip, ConfidenceBar, OddsBadge } from './atoms';
 import PlaceBetButton from './PlaceBetButton';
 
-export default function FuturesBoard() {
+export default function FuturesBoard({ futures = FUTURES }: { futures?: FuturesBet[] }) {
   const [market, setMarket] = useState<FuturesMarket>('Super Bowl');
-  const rows = FUTURES.filter((f) => f.market === market).sort((a, b) => b.edge - a.edge);
+  const rows = futures.filter((f) => f.market === market).sort((a, b) => b.edge - a.edge);
 
   return (
     <div className="space-y-5">
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
         {FUTURES_MARKETS.map((m) => {
-          const count = FUTURES.filter((f) => f.market === m).length;
-          const hasKen = FUTURES.some((f) => f.market === m && f.kenPick);
+          const count = futures.filter((f) => f.market === m).length;
+          const hasKen = futures.some((f) => f.market === m && f.kenPick);
           return (
             <button
               key={m}

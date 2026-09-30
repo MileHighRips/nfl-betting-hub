@@ -40,6 +40,12 @@ export interface Team {
   name: string;
   conference: 'AFC' | 'NFC';
   division: 'East' | 'North' | 'South' | 'West';
+  gameId?: string;
+  pickType?: PickType;
+  side?: string;
+  line?: number;
+  player?: string;
+  propMarket?: string;
   primary: string;
   secondary: string;
   /** Preseason/in-season power rating on a points scale (neutral field). */
@@ -68,6 +74,8 @@ export interface BookLine {
   underPrice: number;
   moneylineHome: number;
   moneylineAway: number;
+  openSpread?: number; // opening home spread (for line-movement / stale detection)
+  openTotal?: number; // opening total
 }
 
 export interface PlayerProp {
@@ -110,6 +118,10 @@ export interface Game {
   awayScore?: number;
   /** Live posted prop lines when a prop feed is connected (transient). */
   livePropLines?: LivePropMap;
+  /** Real per-game player pool from the live DK feed (current rosters). */
+  livePropCandidates?: { player: string; market: string; team: TeamAbbr; line: number }[];
+  /** Live DraftKings anytime-TD scorer odds for this game. */
+  anytimeTdCandidates?: { player: string; team: TeamAbbr; price: number }[];
   /** Names of players ruled out (from the injuries proxy) — excluded from props. */
   outPlayers?: string[];
 }
@@ -147,7 +159,11 @@ export interface ModelPick {
   edge: number; // modelProb - marketProb
   confidence: number; // 0-100 display confidence
   units: number; // recommended stake in units
+  trueUnits?: number; // conviction stake (uncapped quarter-Kelly), for the slate
+  player?: string;
+  propMarket?: string;
   isUnderdogUpset?: boolean;
+  situational?: string; // validated situational edge tag (e.g. rest/blowout total)
   factors: ModelFactor[];
 }
 
@@ -192,10 +208,18 @@ export interface PlacedBet {
   placedAt: string; // ISO
   description: string;
   market: string; // "Week 1 · Spread", "Futures · MVP", etc.
+  gameId?: string;
+  pickType?: PickType;
+  side?: string;
+  line?: number;
+  player?: string;
+  propMarket?: string;
   price: number; // american odds
   stakeUnits: number;
   unitSize: number; // dollars per unit at time of bet
   status: 'pending' | 'won' | 'lost' | 'push';
+  /** True when the user hand-set the outcome — auto-grading must not override it. */
+  manualStatus?: boolean;
   confidence?: number;
   source?: 'model' | 'ken' | 'manual';
 }

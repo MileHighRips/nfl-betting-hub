@@ -40,5 +40,12 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local bankroll store (personal data)
-/data/store/
+# local bankroll store (personal data) — keep bets/locks/CLV local to each
+# install, but SHIP the ML model artifacts so a fresh clone runs the full
+# 15-season-calibrated model out of the box.
+/data/store/*
+!/data/store/ml-model.json
+!/data/store/props-model.json
+
+# personal PDF exports
+*.pdf

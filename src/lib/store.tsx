@@ -22,6 +22,7 @@ interface BankrollState {
   placeBet: (bet: Omit<PlacedBet, 'id' | 'placedAt' | 'unitSize' | 'status'>) => void;
   updateStatus: (id: string, status: PlacedBet['status']) => void;
   removeBet: (id: string) => void;
+  refresh: () => void;
   stats: BankrollStats;
 }
 
@@ -40,7 +41,7 @@ export interface BankrollStats {
 
 const Ctx = createContext<BankrollState | null>(null);
 
-function computeStats(bets: PlacedBet[], unitSize: number): BankrollStats {
+export function computeStats(bets: PlacedBet[], unitSize: number): BankrollStats {
   let won = 0,
     lost = 0,
     push = 0,
@@ -87,6 +88,14 @@ export function BankrollProvider({ children }: { children: ReactNode }) {
   const [unitSize, setUnitSizeState] = useState(10);
   const [hydrated, setHydrated] = useState(false);
 
+  const refresh = useCallback(() => {
+    fetch('/api/bets')
+      .then((r) => r.json())
+      .then((d: { bets: PlacedBet[] }) => setBets(d.bets ?? []))
+      .catch(() => {})
+      .finally(() => setHydrated(true));
+  }, []);
+
   // Hydrate from localStorage immediately, then reconcile with the file store.
   useEffect(() => {
     try {
@@ -97,14 +106,8 @@ export function BankrollProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    fetch('/api/bets')
-      .then((r) => r.json())
-      .then((d: { bets: PlacedBet[] }) => {
-        if (d.bets?.length) setBets(d.bets);
-      })
-      .catch(() => {})
-      .finally(() => setHydrated(true));
-  }, []);
+    refresh();
+  }, [refresh]);
 
   // Persist to localStorage whenever bets change (after hydration).
   useEffect(() => {
@@ -145,7 +148,7 @@ export function BankrollProvider({ children }: { children: ReactNode }) {
   );
 
   const updateStatus = useCallback<BankrollState['updateStatus']>((id, status) => {
-    setBets((prev) => prev.map((b) => (b.id === id ? { ...b, status } : b)));
+    setBets((prev) => prev.map((b) => (b.id === id ? { ...b, status, manualStatus: true } : b)));
     fetch('/api/bets', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -165,8 +168,8 @@ export function BankrollProvider({ children }: { children: ReactNode }) {
   const stats = useMemo(() => computeStats(bets, unitSize), [bets, unitSize]);
 
   const value = useMemo(
-    () => ({ bets, unitSize, setUnitSize, placeBet, updateStatus, removeBet, stats }),
-    [bets, unitSize, setUnitSize, placeBet, updateStatus, removeBet, stats],
+    () => ({ bets, unitSize, setUnitSize, placeBet, updateStatus, removeBet, refresh, stats }),
+    [bets, unitSize, setUnitSize, placeBet, updateStatus, removeBet, refresh, stats],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

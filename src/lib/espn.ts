@@ -67,6 +67,8 @@ function dkFromEspn(odds: EspnOdds | undefined, homeSpread: number): BookLine {
     tot?.over?.close?.line != null
       ? num(tot.over.close.line, odds?.overUnder ?? 44.5)
       : (odds?.overUnder ?? 44.5);
+  const openSpread = ps?.home?.open?.line != null ? num(ps.home.open.line, spread) : undefined;
+  const openTotal = tot?.over?.open?.line != null ? num(tot.over.open.line, total) : undefined;
   return {
     book: 'DraftKings',
     spread,
@@ -77,6 +79,8 @@ function dkFromEspn(odds: EspnOdds | undefined, homeSpread: number): BookLine {
     underPrice: num(tot?.under?.close?.odds, -110),
     moneylineHome: num(ml?.home?.close?.odds, -110),
     moneylineAway: num(ml?.away?.close?.odds, 100),
+    openSpread,
+    openTotal,
   };
 }
 
@@ -142,7 +146,7 @@ const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/sc
 
 export async function fetchEspnWeek(week: number, season = SEASON): Promise<Game[]> {
   const url = `${ESPN_BASE}?week=${week}&seasontype=2&dates=${season}`;
-  const res = await fetch(url, { next: { revalidate: 300 } });
+  const res = await fetch(url, { next: { revalidate: 30 } });
   if (!res.ok) throw new Error(`ESPN ${res.status}`);
   const data = (await res.json()) as EspnScoreboard;
   return (data.events ?? [])
@@ -151,20 +155,153 @@ export async function fetchEspnWeek(week: number, season = SEASON): Promise<Game
     .sort((a, b) => new Date(a.kickoff).getTime() - new Date(b.kickoff).getTime());
 }
 
+/** Team-level box-score efficiency for a single completed game. */
+export interface TeamGameStat {
+  yards?: number; // total yards
+  plays?: number; // offensive plays
+  yardsPerPlay?: number;
+  turnovers?: number;
+  redZoneTd?: number; // red-zone TDs
+  redZoneTrips?: number; // red-zone attempts
+  thirdMade?: number;
+  thirdAtt?: number;
+}
+
 export interface CompletedResult {
+  eventId: string;
   home: TeamAbbr;
   away: TeamAbbr;
   homeScore: number;
   awayScore: number;
+  playerStats: PlayerGameStat[];
+  /** Team efficiency box score (offense side), keyed by team. */
+  teamStats?: Partial<Record<TeamAbbr, TeamGameStat>>;
+}
+
+export interface PlayerGameStat {
+  player: string;
+  team: TeamAbbr;
+  passYards?: number;
+  rushYards?: number;
+  receivingYards?: number;
+  receptions?: number;
+  rushTD?: number;
+  recTD?: number;
+}
+
+interface SummaryStatGroup {
+  name?: string;
+  labels?: string[];
+  keys?: string[];
+  athletes?: { athlete?: { displayName?: string }; stats?: string[] }[];
+}
+
+interface SummaryTeamPlayers {
+  team?: {abbreviation?: string};
+  statistics?: SummaryStatGroup[];
+}
+
+interface SummaryTeamStat {
+  team?: { abbreviation?: string };
+  statistics?: { name?: string; displayValue?: string }[];
+}
+
+/** Parse an ESPN "made-attempts" pair like "5-16" or "1-2". */
+function madeAtt(value: string | undefined): { made?: number; att?: number } {
+  if (!value) return {};
+  const m = value.match(/(-?\d+)\s*-\s*(-?\d+)/);
+  if (!m) return {};
+  return { made: Number(m[1]), att: Number(m[2]) };
+}
+
+function statNumber(value: string | undefined): number | undefined {
+  if (value == null || value === '-' || value === '') return undefined;
+  const cleaned = value.replace(/[^0-9.-]/g, ''); // keep digits, decimal, minus
+  if (cleaned === '' || cleaned === '-' || cleaned === '.') return undefined;
+  const number = Number(cleaned);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+async function fetchSummary(
+  eventId: string,
+): Promise<{ players: PlayerGameStat[]; teamStats: Partial<Record<TeamAbbr, TeamGameStat>> }> {
+  try {
+    const res = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${eventId}`,
+      { next: { revalidate: 120 } },
+    );
+    if (!res.ok) return { players: [], teamStats: {} };
+    const data = (await res.json()) as {
+      boxscore?: { players?: SummaryTeamPlayers[]; teams?: SummaryTeamStat[] };
+    };
+    const byPlayer = new Map<string, PlayerGameStat>();
+
+    for (const teamBlock of data.boxscore?.players ?? []) {
+      const team = toAbbr(teamBlock.team?.abbreviation ?? '');
+      if (!team) continue;
+      for (const group of teamBlock.statistics ?? []) {
+        const category = (group.name ?? '').toLowerCase();
+        const labels = (group.labels ?? group.keys ?? []).map((label) => label.toUpperCase());
+        const yardsIndex = labels.indexOf('YDS');
+        const receptionsIndex = labels.indexOf('REC');
+        const tdIndex = labels.indexOf('TD');
+        for (const athlete of group.athletes ?? []) {
+          const player = athlete.athlete?.displayName;
+          if (!player || !athlete.stats) continue;
+          const key = `${team}|${player.toLowerCase()}`;
+          const current = byPlayer.get(key) ?? { player, team };
+          const yards = statNumber(yardsIndex >= 0 ? athlete.stats[yardsIndex] : undefined);
+          const tds = statNumber(tdIndex >= 0 ? athlete.stats[tdIndex] : undefined);
+          if (category.includes('pass') && yards != null) current.passYards = yards;
+          if (category.includes('rush')) {
+            if (yards != null) current.rushYards = yards;
+            if (tds != null) current.rushTD = tds;
+          }
+          if (category.includes('receiv')) {
+            if (yards != null) current.receivingYards = yards;
+            if (tds != null) current.recTD = tds;
+            const receptions = statNumber(
+              receptionsIndex >= 0 ? athlete.stats[receptionsIndex] : undefined,
+            );
+            if (receptions != null) current.receptions = receptions;
+          }
+          byPlayer.set(key, current);
+        }
+      }
+    }
+
+    const teamStats: Partial<Record<TeamAbbr, TeamGameStat>> = {};
+    for (const block of data.boxscore?.teams ?? []) {
+      const team = toAbbr(block.team?.abbreviation ?? '');
+      if (!team) continue;
+      const s = new Map((block.statistics ?? []).map((x) => [x.name ?? '', x.displayValue]));
+      const rz = madeAtt(s.get('redZoneAttempts'));
+      const third = madeAtt(s.get('thirdDownEff'));
+      teamStats[team] = {
+        yards: statNumber(s.get('totalYards')),
+        plays: statNumber(s.get('totalOffensivePlays')),
+        yardsPerPlay: statNumber(s.get('yardsPerPlay')),
+        turnovers: statNumber(s.get('turnovers')),
+        redZoneTd: rz.made,
+        redZoneTrips: rz.att,
+        thirdMade: third.made,
+        thirdAtt: third.att,
+      };
+    }
+
+    return { players: [...byPlayer.values()], teamStats };
+  } catch {
+    return { players: [], teamStats: {} };
+  }
 }
 
 /** Completed results for a week, used by the in-season form model. */
 export async function fetchEspnResults(week: number, season = SEASON): Promise<CompletedResult[]> {
   const url = `${ESPN_BASE}?week=${week}&seasontype=2&dates=${season}`;
-  const res = await fetch(url, { next: { revalidate: 300 } });
+  const res = await fetch(url, { next: { revalidate: 30 } });
   if (!res.ok) throw new Error(`ESPN ${res.status}`);
   const data = (await res.json()) as EspnScoreboard;
-  const out: CompletedResult[] = [];
+  const completed: { event: EspnEvent; comp: EspnCompetition }[] = [];
   for (const ev of data.events ?? []) {
     const comp = ev.competitions?.[0];
     if (!comp?.status?.type?.completed) continue;
@@ -173,12 +310,22 @@ export async function fetchEspnResults(week: number, season = SEASON): Promise<C
     const home = homeC && toAbbr(homeC.team.abbreviation);
     const away = awayC && toAbbr(awayC.team.abbreviation);
     if (!home || !away) continue;
-    out.push({
-      home,
-      away,
-      homeScore: Number(homeC!.score ?? 0),
-      awayScore: Number(awayC!.score ?? 0),
-    });
+    completed.push({ event: ev, comp });
   }
-  return out;
+  return Promise.all(
+    completed.map(async ({ event, comp }) => {
+      const homeC = comp.competitors.find((c) => c.homeAway === 'home')!;
+      const awayC = comp.competitors.find((c) => c.homeAway === 'away')!;
+      const summary = await fetchSummary(event.id);
+      return {
+        eventId: event.id,
+        home: toAbbr(homeC.team.abbreviation)!,
+        away: toAbbr(awayC.team.abbreviation)!,
+        homeScore: Number(homeC.score ?? 0),
+        awayScore: Number(awayC.score ?? 0),
+        playerStats: summary.players,
+        teamStats: summary.teamStats,
+      };
+    }),
+  );
 }

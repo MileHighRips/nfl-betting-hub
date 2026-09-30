@@ -1,24 +1,26 @@
 import Link from 'next/link';
 import { ArrowRight, Flame, Star, TrendingUp, Trophy } from 'lucide-react';
 import { getGames } from '@/lib/odds-source';
-import { analyzeGame } from '@/lib/model';
+import { analyzeGamesWithLocks } from '@/lib/pick-locks';
 import { FUTURES } from '@/data/futures';
-import { SEASON, getCurrentWeek } from '@/lib/schedule';
+import { SEASON } from '@/lib/schedule';
+import { getActiveWeek } from '@/lib/active-week';
 import { getFormRatings } from '@/lib/form';
 import { Chip, ConfidenceBar, OddsBadge, SectionTitle } from '@/components/atoms';
 import PlaceBetButton from '@/components/PlaceBetButton';
 import DashboardStats from '@/components/DashboardStats';
+import RefreshAllButton from '@/components/RefreshAllButton';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
-  const CURRENT_WEEK = getCurrentWeek();
+  const CURRENT_WEEK = await getActiveWeek();
   const CURRENT_SEASON = SEASON;
   const [{ games, source, provider }, ratings] = await Promise.all([
     getGames(CURRENT_WEEK),
     getFormRatings(CURRENT_WEEK),
   ]);
-  const analyses = games.map((g) => analyzeGame(g, ratings));
+  const analyses = await analyzeGamesWithLocks(games, ratings);
 
   const topPlays = analyses
     .map((a) => a.topPick)
@@ -36,13 +38,16 @@ export default async function DashboardPage() {
       <section className="card relative overflow-hidden p-6 sm:p-8">
         <div className="absolute -top-16 -right-16 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl" />
         <div className="relative">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Chip variant="value">
               <Flame size={12} /> {source === 'live' ? provider : 'Seed Odds'}
             </Chip>
             <Chip>
               Season {CURRENT_SEASON} · Week {CURRENT_WEEK}
             </Chip>
+            <div className="sm:ml-auto">
+              <RefreshAllButton />
+            </div>
           </div>
           <h1 className="mt-3 max-w-2xl text-3xl font-black tracking-tight text-white sm:text-4xl">
             The complete <span className="grad-text">NFL betting hub</span>, built on Ken
@@ -101,6 +106,12 @@ export default async function DashboardPage() {
                   stakeUnits={Number(p.units.toFixed(2))}
                   confidence={p.confidence}
                   source="model"
+                  gameId={p.gameId}
+                  pickType={p.type}
+                  side={p.side}
+                  line={p.line}
+                  player={p.player}
+                  propMarket={p.propMarket}
                   compact
                 />
               </div>

@@ -1,0 +1,90 @@
+{
+  "meta": {
+    "trainedAt": "2026-09-29T04:21:06.064060+00:00",
+    "seasons": [
+      2011,
+      2024
+    ],
+    "nPlayerGames": 71591,
+    "seasonDecay": 0.85,
+    "features": [
+      "r_td_rate",
+      "r_rush_tds",
+      "r_rec_tds",
+      "r_carries",
+      "r_targets",
+      "r_receptions",
+      "r_rush_yds",
+      "r_rec_yds",
+      "r_target_share",
+      "r_air_yards_share",
+      "r_wopr",
+      "opp_pos_td_allowed",
+      "is_RB",
+      "is_WR",
+      "is_TE",
+      "is_QB",
+      "week"
+    ],
+    "note": "Anytime-TD probability model. No historical prop lines offline; compare these calibrated probabilities to live DK prices for +EV."
+  },
+  "anytimeTd": {
+    "gradedGames": 18327,
+    "baseRate": 0.2497,
+    "brierModel": 0.1759,
+    "brierBaseline": 0.1886,
+    "calibration": [
+      {
+        "lo": 0,
+        "hi": 0.1,
+        "n": 429,
+        "pred": 0.0901,
+        "real": 0.1119
+      },
+      {
+        "lo": 0.1,
+        "hi": 0.2,
+        "n": 6353,
+        "pred": 0.1567,
+        "real": 0.1483
+      },
+      {
+        "lo": 0.2,
+        "hi": 0.3,
+        "n": 6140,
+        "pred": 0.2443,
+        "real": 0.242
+      },
+      {
+        "lo": 0.3,
+        "hi": 0.45,
+        "n": 4285,
+        "pred": 0.3605,
+        "real": 0.3636
+      },
+      {
+        "lo": 0.45,
+        "hi": 1.01,
+        "n": 1120,
+        "pred": 0.505,
+        "real": 0.4848
+      }
+    ]
+  },
+  "yardageMae": {
+    "receiving": {
+      "model": 20.33,
+      "naive": 20.26
+    },
+    "rushing": {
+      "model": 21.77,
+      "naive": 21.57
+    }
+  },
+  "propResidualSd": {
+    "Pass Yards": 83.95,
+    "Rush Yards": 33.78,
+    "Receiving Yards": 32.8,
+    "Receptions": 2.22
+  }
+}

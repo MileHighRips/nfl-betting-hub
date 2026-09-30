@@ -1,6 +1,6 @@
 import { TEAMS } from './teams';
-import { TEAM_PROPS } from '@/data/props';
 import { SEASON } from './schedule';
+import { memo } from './cache';
 import type { TeamAbbr } from './types';
 
 /**
@@ -18,13 +18,6 @@ const NAME_TO_ABBR: Record<string, TeamAbbr> = Object.fromEntries(
 ) as Record<string, TeamAbbr>;
 NAME_TO_ABBR['Washington Commanders'] = 'WAS';
 
-// Each team's presumed starting QB (first Pass Yards candidate in the pool).
-const STARTER_QB: Partial<Record<TeamAbbr, string>> = Object.fromEntries(
-  (Object.entries(TEAM_PROPS) as [TeamAbbr, { player: string; market: string }[]][]).map(
-    ([abbr, list]) => [abbr, list.find((c) => c.market === 'Pass Yards')?.player],
-  ),
-) as Partial<Record<TeamAbbr, string>>;
-
 const UNAVAILABLE = new Set(['Out', 'Injured Reserve', 'Suspension', 'Doubtful']);
 
 export interface TeamInjuries {
@@ -40,10 +33,13 @@ interface EspnInjuryTeam {
   }[];
 }
 
-export async function getInjuries(): Promise<Partial<Record<TeamAbbr, TeamInjuries>>> {
+// The ESPN injuries payload is ~11MB — far over Next's 2MB fetch-cache limit, so
+// caching the raw response fails. Instead cache the tiny parsed result (a few
+// out players per team) so the big download + parse runs at most once per TTL.
+const fetchInjuries = async (): Promise<Partial<Record<TeamAbbr, TeamInjuries>>> => {
   try {
     const res = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries', {
-      next: { revalidate: 900 },
+      cache: 'no-store',
     });
     if (!res.ok) return {};
     const data = (await res.json()) as { injuries?: EspnInjuryTeam[] };
@@ -58,13 +54,9 @@ export async function getInjuries(): Promise<Partial<Record<TeamAbbr, TeamInjuri
         const name = inj.athlete?.displayName;
         if (!name) continue;
         unavailable.push(name);
-        if (
-          inj.athlete?.position?.abbreviation === 'QB' &&
-          STARTER_QB[abbr] &&
-          name.toLowerCase() === STARTER_QB[abbr]!.toLowerCase()
-        ) {
-          qbOut = true;
-        }
+        // Live, roster-agnostic: any ruled-out QB flags qbOut; odds-source then
+        // refines it against the live DK starter (passing-prop player).
+        if (inj.athlete?.position?.abbreviation === 'QB') qbOut = true;
       }
       out[abbr] = { qbOut, unavailable };
     }
@@ -72,7 +64,9 @@ export async function getInjuries(): Promise<Partial<Record<TeamAbbr, TeamInjuri
   } catch {
     return {};
   }
-}
+};
+
+export const getInjuries = () => memo('injuries', 300_000, fetchInjuries);
 
 interface EspnDatedEvent {
   date: string;

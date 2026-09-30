@@ -58,12 +58,11 @@ export interface TeamProfile {
   net: number; // offense - defense (power rating)
 }
 
-/** Efficiency profile with in-season form (net delta) folded in. */
-export function teamProfile(abbr: TeamAbbr, formNet = 0): TeamProfile {
+/** Efficiency profile with in-season form folded in (offense & defense separately). */
+export function teamProfile(abbr: TeamAbbr, offForm = 0, defForm = 0): TeamProfile {
   const c = CENTERED[abbr];
-  // Split improving/declining form between the offense and defense.
-  const offense = c.offense + formNet * 0.5;
-  const defense = c.defense - formNet * 0.5;
+  const offense = c.offense + offForm;
+  const defense = c.defense + defForm; // + = leakier (allows more)
   return { offense, defense, pace: c.pace, net: offense - defense };
 }
 

@@ -1,24 +1,52 @@
 import { AlertTriangle, TrendingUp } from 'lucide-react';
+import clsx from 'clsx';
 import type { GameAnalysis } from '@/lib/model';
+import type { GameGrades, PickResult } from '@/lib/pick-grade';
 import { TEAMS } from '@/lib/teams';
 import { fmtKick } from '@/lib/format';
 import { formatOdds } from '@/lib/odds';
 import { Chip, ConfidenceBar, OddsBadge, TeamBadge } from './atoms';
 import PlaceBetButton from './PlaceBetButton';
+import LockToggle from './LockToggle';
 import type { ModelPick } from '@/lib/types';
+import type { ParlaySuggestion } from '@/lib/parlays';
+
+export function ResultBadge({ result }: { result?: PickResult }) {
+  if (!result) return null;
+  return (
+    <span
+      className={clsx(
+        'chip',
+        result === 'won' && 'border-emerald-500/50 bg-emerald-500/15 text-emerald-400',
+        result === 'lost' && 'border-red-500/50 bg-red-500/15 text-red-400',
+        result === 'push' && 'border-zinc-500/50 bg-zinc-500/15 text-zinc-300',
+      )}
+    >
+      {result === 'won' ? 'Won' : result === 'lost' ? 'Lost' : 'Push'}
+    </span>
+  );
+}
+// The slate stakes by conviction (true units). Legacy week 1-2 locks have no
+// trueUnits, so they keep their frozen flat stake and never move.
+function stakeOf(pick: { units: number; trueUnits?: number }): number {
+  return Number((pick.trueUnits ?? pick.units).toFixed(2));
+}
 
 function PickRow({
   label,
   pick,
   matchup,
   week,
+  result,
 }: {
   label: string;
   pick: ModelPick;
   matchup: string;
   week: number;
+  result?: PickResult;
 }) {
   const edgePos = pick.edge > 0;
+  const stake = stakeOf(pick);
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
@@ -29,6 +57,7 @@ function PickRow({
               +{(pick.edge * 100).toFixed(1)}% edge
             </span>
           )}
+          <ResultBadge result={result} />
         </div>
         <div className="mt-0.5 truncate text-sm font-semibold text-white">{pick.selection}</div>
         <div className="mt-1.5 max-w-[220px]">
@@ -37,14 +66,20 @@ function PickRow({
       </div>
       <div className="flex items-center gap-2">
         <OddsBadge price={pick.price} book={pick.book} />
-        {pick.units > 0 ? (
+        {stake > 0 ? (
           <PlaceBetButton
             description={`${pick.selection} (${matchup})`}
             market={`Week ${week} · ${pick.type}`}
             price={pick.price}
-            stakeUnits={Number(pick.units.toFixed(2))}
+            stakeUnits={stake}
             confidence={pick.confidence}
             source="model"
+            gameId={pick.gameId}
+            pickType={pick.type}
+            side={pick.side}
+            line={pick.line}
+            player={pick.player}
+            propMarket={pick.propMarket}
           />
         ) : (
           <span className="chip">No value</span>
@@ -54,7 +89,15 @@ function PickRow({
   );
 }
 
-export default function GameCard({ a }: { a: GameAnalysis }) {
+export default function GameCard({
+  a,
+  grades,
+  sgp,
+}: {
+  a: GameAnalysis;
+  grades?: GameGrades;
+  sgp?: ParlaySuggestion;
+}) {
   const { game } = a;
   const home = TEAMS[game.home];
   const away = TEAMS[game.away];
@@ -92,6 +135,7 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
             <span className="chip border-red-500/40 bg-red-500/10 text-red-300">LIVE</span>
           )}
           {game.status === 'post' && <Chip>Final</Chip>}
+          <LockToggle gameId={game.id} locked={!!a.locked} />
           {game.context.awayQbOut && (
             <span className="chip border-amber-500/40 bg-amber-500/10 text-amber-300">
               {away.abbr} QB Out
@@ -141,14 +185,27 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
 
       {/* Model picks */}
       <div className="space-y-2 px-4 pb-3">
-        <PickRow label="Model · Spread" pick={a.spread} matchup={matchup} week={game.week} />
-        <PickRow label="Model · Total" pick={a.total} matchup={matchup} week={game.week} />
+        <PickRow
+          label="Model · Spread"
+          pick={a.spread}
+          matchup={matchup}
+          week={game.week}
+          result={grades?.spread}
+        />
+        <PickRow
+          label="Model · Total"
+          pick={a.total}
+          matchup={matchup}
+          week={game.week}
+          result={grades?.total}
+        />
         {a.moneyline.confidence >= a.spread.confidence && (
           <PickRow
             label="Model · Moneyline"
             pick={a.moneyline}
             matchup={matchup}
             week={game.week}
+            result={grades?.moneyline}
           />
         )}
       </div>
@@ -159,7 +216,10 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
           <AlertTriangle size={18} className="text-amber-400" />
           <div className="min-w-0 flex-1">
             <div className="text-xs font-bold text-amber-300">Underdog Upset Angle</div>
-            <div className="truncate text-sm font-semibold text-white">{a.upset.selection}</div>
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-semibold text-white">{a.upset.selection}</span>
+              <ResultBadge result={grades?.upset} />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <span className="mono text-xs text-amber-300">{a.upset.confidence}%</span>
@@ -168,49 +228,179 @@ export default function GameCard({ a }: { a: GameAnalysis }) {
               description={`${a.upset.selection} (${matchup})`}
               market={`Week ${game.week} · Upset`}
               price={a.upset.price}
-              stakeUnits={Number(a.upset.units.toFixed(2))}
+              stakeUnits={stakeOf(a.upset)}
               confidence={a.upset.confidence}
               source="model"
+              gameId={a.upset.gameId}
+              pickType={a.upset.type}
+              side={a.upset.side}
+              line={a.upset.line}
             />
           </div>
         </div>
       )}
 
-      {/* Best prop */}
+      {/* Value props (multiple when the model finds value) */}
       <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)]/40 p-4">
         <div className="mb-2 flex items-center gap-2">
           <TrendingUp size={15} className="text-cyan-400" />
           <span className="text-[10px] tracking-widest text-zinc-500 uppercase">
-            Highest-Confidence Prop
+            {a.props.length > 1 ? 'Value Props' : 'Highest-Confidence Prop'}
           </span>
+          {a.locked && <ResultBadge result={grades?.prop} />}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-white">
-              {a.propDetail.player} · {a.propDetail.side} {a.propDetail.line} {a.propDetail.market}
-            </div>
-            <div className="mt-0.5 line-clamp-2 text-xs text-zinc-500">
-              {a.propDetail.rationale}
-            </div>
-            <div className="mt-1.5 max-w-[240px]">
-              <ConfidenceBar value={a.propDetail.confidence} />
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="mono text-xs text-zinc-400">
-              proj {a.propDetail.projection} / {formatOdds(a.propDetail.price)}
-            </span>
-            <PlaceBetButton
-              description={`${a.propDetail.player} ${a.propDetail.side} ${a.propDetail.line} ${a.propDetail.market} (${matchup})`}
-              market={`Week ${game.week} · Prop`}
-              price={a.propDetail.price}
-              stakeUnits={Number(a.prop.units.toFixed(2)) || 0.5}
-              confidence={a.propDetail.confidence}
-              source="model"
-            />
-          </div>
+        <div className="space-y-2">
+          {a.props.map(({ pick, detail }, i) => {
+            const stake = stakeOf(pick);
+            return (
+              <div
+                key={`${detail.player}-${detail.market}-${i}`}
+                className="flex flex-col gap-2 sm:flex-row sm:items-center"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-white">
+                      {detail.player} · {detail.side} {detail.line} {detail.market}
+                    </span>
+                    {pick.edge > 0 && (
+                      <span className="text-[10px] font-semibold text-emerald-400">
+                        +{(pick.edge * 100).toFixed(1)}%
+                      </span>
+                    )}
+                    {i === 0 && a.locked && <ResultBadge result={grades?.prop} />}
+                  </div>
+                  <div className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{detail.rationale}</div>
+                  <div className="mt-1.5 max-w-[240px]">
+                    <ConfidenceBar value={detail.confidence} />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="mono text-xs text-zinc-400">
+                    proj {detail.projection} / {formatOdds(detail.price)}
+                  </span>
+                  {stake > 0 ? (
+                    <PlaceBetButton
+                      description={`${detail.player} ${detail.side} ${detail.line} ${detail.market} (${matchup})`}
+                      market={`Week ${game.week} · Prop`}
+                      price={detail.price}
+                      stakeUnits={stake}
+                      confidence={detail.confidence}
+                      source="model"
+                      gameId={pick.gameId}
+                      pickType={pick.type}
+                      side={detail.side.toLowerCase()}
+                      line={pick.line}
+                      player={detail.player}
+                      propMarket={detail.market}
+                    />
+                  ) : (
+                    <span className="chip">No value</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {a.props.length === 0 && (
+            <div className="text-xs text-zinc-500">No prop value in this game.</div>
+          )}
         </div>
       </div>
+
+      {/* Anytime TDs (multiple scorers when there's value) */}
+      {a.anytimeTds.length > 0 && (
+        <div className="border-t border-[var(--color-border)] px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[10px] tracking-widest text-orange-400 uppercase">
+              {a.anytimeTds.length > 1 ? 'Anytime TD Value' : 'Anytime TD'}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {a.anytimeTds.map((td, i) => {
+              const stake = stakeOf(td);
+              const tdGrade =
+                td.player === a.anytimeTd?.player
+                  ? grades?.anytimeTd
+                  : td.player === a.anytimeTdLongshot?.player
+                    ? grades?.anytimeTdLongshot
+                    : undefined;
+              return (
+                <div
+                  key={`${td.player}-${i}`}
+                  className="flex flex-col gap-2 sm:flex-row sm:items-center"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-white">{td.player}</span>
+                      {td.ev > 0 && (
+                        <span className="text-[10px] font-semibold text-emerald-400">
+                          +{(td.ev * 100).toFixed(0)}% EV
+                        </span>
+                      )}
+                      {a.locked && <ResultBadge result={tdGrade} />}
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      {Math.round(td.prob * 100)}% to score · DK{' '}
+                      {Math.round(td.impliedProb * 100)}%
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <OddsBadge price={td.price} book={td.book} />
+                    {stake > 0 ? (
+                      <PlaceBetButton
+                        description={`${td.player} Anytime TD (${matchup})`}
+                        market={`Week ${game.week} · Anytime TD`}
+                        price={td.price}
+                        stakeUnits={stake}
+                        confidence={Math.round(td.prob * 100)}
+                        source="model"
+                      />
+                    ) : (
+                      <span className="chip">No value</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Same-game parlay for this game (correlated, +EV — payout is a book-verified estimate) */}
+      {sgp && (
+        <div className="border-t border-fuchsia-500/30 bg-fuchsia-500/5 px-4 py-3">
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] tracking-widest text-fuchsia-300 uppercase">
+              Same-Game Parlay
+            </span>
+            <span className="mono text-xs font-bold text-white">
+              {formatOdds(sgp.americanOdds)}
+            </span>
+            <span className="text-[10px] font-semibold text-emerald-400">
+              +{(sgp.ev * 100).toFixed(0)}% EV
+            </span>
+            <span className="chip">est. · verify at book</span>
+            <div className="ml-auto">
+              <PlaceBetButton
+                description={`SGP (${matchup}): ${sgp.legs.map((l) => l.selection).join(' + ')}`}
+                market={`Week ${game.week} · SGP`}
+                price={sgp.americanOdds}
+                stakeUnits={Number(sgp.units.toFixed(2))}
+                source="model"
+                gameId={game.id}
+                compact
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            {sgp.legs.map((l, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="min-w-0 flex-1 truncate text-zinc-200">{l.selection}</span>
+                <span className="mono text-zinc-400">{formatOdds(l.price)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

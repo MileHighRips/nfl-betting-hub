@@ -1,0 +1,353 @@
+{
+  "meta": {
+    "trainedAt": "2026-09-29T05:18:33.815835+00:00",
+    "seasons": [
+      2011,
+      2026
+    ],
+    "nGames": 3967,
+    "seasonDecay": 0.85,
+    "features": [
+      "elo_diff",
+      "home_elo",
+      "away_elo",
+      "home_rest",
+      "away_rest",
+      "rest_diff",
+      "div_game",
+      "is_dome",
+      "week",
+      "home_roll_margin",
+      "away_roll_margin",
+      "home_roll_pf",
+      "home_roll_pa",
+      "away_roll_pf",
+      "away_roll_pa",
+      "spread_line",
+      "total_line"
+    ],
+    "marginResidualSd": 11.857,
+    "models": [
+      "xgb",
+      "rf",
+      "mlp",
+      "ridge",
+      "poisson",
+      "logit"
+    ]
+  },
+  "atsWalkForward": {
+    "xgb": {
+      "n": 1103,
+      "wins": 546,
+      "losses": 557,
+      "acc": 0.495,
+      "roi": -0.055,
+      "sel_n": 502,
+      "sel_acc": 0.4801,
+      "sel_roi": -0.0835
+    },
+    "rf": {
+      "n": 1103,
+      "wins": 525,
+      "losses": 578,
+      "acc": 0.476,
+      "roi": -0.0913,
+      "sel_n": 394,
+      "sel_acc": 0.4695,
+      "sel_roi": -0.1036
+    },
+    "mlp": {
+      "n": 1103,
+      "wins": 553,
+      "losses": 550,
+      "acc": 0.5014,
+      "roi": -0.0429,
+      "sel_n": 364,
+      "sel_acc": 0.5137,
+      "sel_roi": -0.0192
+    },
+    "ridge": {
+      "n": 1103,
+      "wins": 568,
+      "losses": 535,
+      "acc": 0.515,
+      "roi": -0.0169,
+      "sel_n": 84,
+      "sel_acc": 0.5833,
+      "sel_roi": 0.1136
+    },
+    "poisson": {
+      "n": 1103,
+      "wins": 568,
+      "losses": 535,
+      "acc": 0.515,
+      "roi": -0.0169,
+      "sel_n": 97,
+      "sel_acc": 0.5258,
+      "sel_roi": 0.0037
+    },
+    "ENSEMBLE": {
+      "n": 1103,
+      "wins": 539,
+      "losses": 564,
+      "acc": 0.4887,
+      "roi": -0.0671,
+      "sel_n": 188,
+      "sel_acc": 0.4947,
+      "sel_roi": -0.0556
+    },
+    "logit": {
+      "n": 1103,
+      "wins": 549,
+      "losses": 554,
+      "acc": 0.4977,
+      "roi": -0.0498,
+      "sel_n": 126,
+      "sel_acc": 0.5476,
+      "sel_roi": 0.0455
+    }
+  },
+  "ouWalkForward": {
+    "xgb": {
+      "n": 1127,
+      "wins": 562,
+      "losses": 565,
+      "acc": 0.4987,
+      "roi": -0.048,
+      "sel_n": 491,
+      "sel_acc": 0.5051,
+      "sel_roi": -0.0357
+    },
+    "rf": {
+      "n": 1127,
+      "wins": 567,
+      "losses": 560,
+      "acc": 0.5031,
+      "roi": -0.0395,
+      "sel_n": 337,
+      "sel_acc": 0.5282,
+      "sel_roi": 0.0084
+    },
+    "poisson": {
+      "n": 1127,
+      "wins": 548,
+      "losses": 579,
+      "acc": 0.4862,
+      "roi": -0.0717,
+      "sel_n": 209,
+      "sel_acc": 0.5646,
+      "sel_roi": 0.0779
+    },
+    "ENSEMBLE": {
+      "n": 1127,
+      "wins": 579,
+      "losses": 548,
+      "acc": 0.5138,
+      "roi": -0.0192,
+      "sel_n": 282,
+      "sel_acc": 0.4894,
+      "sel_roi": -0.0658
+    }
+  },
+  "segments": [
+    {
+      "segment": "ALL",
+      "n": 1135,
+      "ou_roi": -0.0192,
+      "ou_acc": 0.5138,
+      "ats_roi": -0.0671,
+      "ats_acc": 0.4887
+    },
+    {
+      "segment": "high_total (>=47)",
+      "n": 303,
+      "ou_roi": -0.0391,
+      "ou_acc": 0.5033,
+      "ats_roi": -0.0909,
+      "ats_acc": 0.4762
+    },
+    {
+      "segment": "low_total (<=41)",
+      "n": 265,
+      "ou_roi": -0.0128,
+      "ou_acc": 0.5171,
+      "ats_roi": -0.0227,
+      "ats_acc": 0.5119
+    },
+    {
+      "segment": "divisional",
+      "n": 397,
+      "ou_roi": -0.0503,
+      "ou_acc": 0.4975,
+      "ats_roi": -0.0918,
+      "ats_acc": 0.4757
+    },
+    {
+      "segment": "big_rest_edge (|\u0394|>=3)",
+      "n": 240,
+      "ou_roi": 0.0561,
+      "ou_acc": 0.5532,
+      "ats_roi": -0.147,
+      "ats_acc": 0.4468
+    },
+    {
+      "segment": "big_favorite (|spr|>=7)",
+      "n": 288,
+      "ou_roi": 0.0613,
+      "ou_acc": 0.5559,
+      "ats_roi": -0.0421,
+      "ats_acc": 0.5018
+    },
+    {
+      "segment": "pickem (|spr|<=3)",
+      "n": 455,
+      "ou_roi": -0.0813,
+      "ou_acc": 0.4812,
+      "ats_roi": -0.0962,
+      "ats_acc": 0.4734
+    }
+  ],
+  "teamElo": [
+    {
+      "team": "BUF",
+      "elo": 1644.1
+    },
+    {
+      "team": "SEA",
+      "elo": 1643.8
+    },
+    {
+      "team": "SF",
+      "elo": 1614.5
+    },
+    {
+      "team": "MIN",
+      "elo": 1613.4
+    },
+    {
+      "team": "DEN",
+      "elo": 1605.3
+    },
+    {
+      "team": "JAX",
+      "elo": 1601.2
+    },
+    {
+      "team": "LA",
+      "elo": 1562.8
+    },
+    {
+      "team": "CHI",
+      "elo": 1562.2
+    },
+    {
+      "team": "DET",
+      "elo": 1555.1
+    },
+    {
+      "team": "KC",
+      "elo": 1553.7
+    },
+    {
+      "team": "NE",
+      "elo": 1553.0
+    },
+    {
+      "team": "BAL",
+      "elo": 1548.4
+    },
+    {
+      "team": "PHI",
+      "elo": 1541.6
+    },
+    {
+      "team": "PIT",
+      "elo": 1532.0
+    },
+    {
+      "team": "HOU",
+      "elo": 1527.1
+    },
+    {
+      "team": "CIN",
+      "elo": 1523.4
+    },
+    {
+      "team": "GB",
+      "elo": 1477.5
+    },
+    {
+      "team": "STL",
+      "elo": 1464.9
+    },
+    {
+      "team": "ATL",
+      "elo": 1458.8
+    },
+    {
+      "team": "LV",
+      "elo": 1449.0
+    },
+    {
+      "team": "LAC",
+      "elo": 1448.5
+    },
+    {
+      "team": "DAL",
+      "elo": 1447.4
+    },
+    {
+      "team": "CLE",
+      "elo": 1443.2
+    },
+    {
+      "team": "IND",
+      "elo": 1442.7
+    },
+    {
+      "team": "WAS",
+      "elo": 1440.9
+    },
+    {
+      "team": "CAR",
+      "elo": 1439.8
+    },
+    {
+      "team": "NO",
+      "elo": 1438.0
+    },
+    {
+      "team": "NYG",
+      "elo": 1436.1
+    },
+    {
+      "team": "TB",
+      "elo": 1427.3
+    },
+    {
+      "team": "ARI",
+      "elo": 1408.7
+    },
+    {
+      "team": "OAK",
+      "elo": 1397.9
+    },
+    {
+      "team": "SD",
+      "elo": 1397.3
+    },
+    {
+      "team": "MIA",
+      "elo": 1390.1
+    },
+    {
+      "team": "NYJ",
+      "elo": 1371.2
+    },
+    {
+      "team": "TEN",
+      "elo": 1307.9
+    }
+  ]
+}

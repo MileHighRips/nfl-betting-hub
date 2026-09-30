@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { PlacedBet } from '@/lib/types';
+import { gradePendingBets } from '@/lib/grade';
 
 /**
  * File-backed bankroll store. Persists placed bets to data/store/bets.json so
@@ -28,7 +29,9 @@ async function writeStore(bets: PlacedBet[]): Promise<void> {
 
 export async function GET() {
   const bets = await readStore();
-  return NextResponse.json({ bets });
+  const graded = await gradePendingBets(bets);
+  if (graded.some((bet, index) => bet.status !== bets[index]?.status)) await writeStore(graded);
+  return NextResponse.json({ bets: graded });
 }
 
 export async function POST(req: Request) {
@@ -43,7 +46,11 @@ export async function PATCH(req: Request) {
   const { id, status } = (await req.json()) as { id: string; status: PlacedBet['status'] };
   const bets = await readStore();
   const idx = bets.findIndex((b) => b.id === id);
-  if (idx >= 0) bets[idx].status = status;
+  // A hand-set outcome is sticky — flag it so auto-grading never overrides it.
+  if (idx >= 0) {
+    bets[idx].status = status;
+    bets[idx].manualStatus = true;
+  }
   await writeStore(bets);
   return NextResponse.json({ ok: true, bets });
 }
