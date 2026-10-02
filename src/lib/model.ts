@@ -11,8 +11,10 @@ import {
 import { bestProp, bestProps } from './props';
 import { homeCoverProb, overProb, simulateGame, type GameSim } from './simulation';
 import { passesConviction } from './calibration';
-import { calibrateTdProb, getTdCalibration } from './props-model';
+import { calibrateTdProb, getTdCalibration, getPropResidualSds } from './props-model';
 import { softTotalEdge } from './segments';
+import { gradeDisconnect, MARGIN_SD, TOTAL_SD, type Disconnect } from './disconnect';
+import { computeGameScript, type GameScript } from './game-script';
 import type { Ratings } from './form';
 import { WEEK1_HISTORICAL_PICKS, type HistoricalPickOverride } from '@/data/historicalPicks';
 
@@ -78,6 +80,8 @@ export interface GameAnalysis {
   anytimeTds: AnytimeTdPick[];
   locked?: boolean;
   topPick: ModelPick;
+  /** Projected game script (high/low scoring, blowout) from the sim. */
+  script?: GameScript;
 }
 
 export interface AnytimeTdPick {
@@ -91,6 +95,12 @@ export interface AnytimeTdPick {
   ev: number; // expected profit per 1u staked
   units: number;
   trueUnits?: number; // conviction stake for the slate
+  disconnect?: Disconnect;
+  /** Structured beat-writer/role signal reason (e.g. "lead/goal-line role"). */
+  note?: string;
+  /** Aligned with the projected game script (blowout usage tilt). */
+  narrative?: boolean;
+  scriptTag?: string;
 }
 
 export function analyzeGame(
@@ -168,28 +178,91 @@ export function analyzeGame(
   const topPick = candidates.reduce((a, b) => (b.confidence > a.confidence ? b : a));
 
   const atdPicks = evaluateAnytimeTds(game, sim, con);
-  // Primary: the most profitable likely scorer (shorter than +250).
-  const anytimeTd = maxEv(atdPicks.filter((p) => p.price <= 250)) ?? maxEv(atdPicks);
-  // Longshot: bigger payouts only (+1000 and up), a real red-zone threat
-  // (>=6% to score), best value with likelihood weighted in.
-  const distinct = (p: AnytimeTdPick) => p.player !== anytimeTd?.player;
-  // Longshot: only a genuine +EV big payout — never a forced no-edge dart.
-  let anytimeTdLongshot = bestLongshot(
-    atdPicks.filter((p) => p.price >= 1000 && p.prob >= 0.06 && p.ev > 0 && distinct(p)),
-  );
-  // If no +1000 value exists, allow a shorter (+300 or longer) +EV underdog scorer.
-  if (!anytimeTdLongshot) {
-    anytimeTdLongshot = bestLongshot(
-      atdPicks.filter((p) => p.price >= 300 && p.ev > 0 && distinct(p)),
-    );
-  }
+  for (const p of atdPicks) p.disconnect = gradeDisconnect(p.edge);
 
-  // Anytime-TD ran 35% (a big loser). Surface only high-EV scorers — a real EV
-  // floor and at most 2 per game, best first.
-  const anytimeTds = atdPicks
-    .filter((p) => p.ev > 0.1)
-    .sort((a, b) => b.ev - a.ev)
-    .slice(0, 2);
+  // Reconciled anytime-TD book: LONGSHOTS ONLY (+500 and up, up to +3000) that
+  // have value. Within that floor, show a scorer when it's genuinely +EV (>=2%),
+  // OR when a News/Narrative signal backs it — the scraped edge the market hasn't
+  // priced yet. Ranked so news-driven value leads; sub-EV news/narrative leans get
+  // a tiny sprinkle so they're bettable but can't sink the book.
+  const LONGSHOT_MIN = 500;
+  const SPRINKLE = 0.15;
+  const atdScore = (p: AnytimeTdPick) => p.ev + (p.note ? 1 : 0) + (p.narrative ? 0.25 : 0);
+  const longshotTds = atdPicks
+    .filter((p) => p.price >= LONGSHOT_MIN && (p.ev >= 0.02 || p.note || p.narrative))
+    .map((p) =>
+      p.ev >= 0.02
+        ? p
+        : { ...p, units: Math.max(p.units, SPRINKLE), trueUnits: Math.max(p.trueUnits ?? 0, SPRINKLE) },
+    )
+    .sort((a, b) => atdScore(b) - atdScore(a));
+  const anytimeTd = longshotTds[0];
+  const anytimeTdLongshot = longshotTds[1];
+
+  // Attach a market-disconnect score to every pick (magnitude of value vs the
+  // price). Display/ranking only — edge already drives staking, so no double-count.
+  const propSds = getPropResidualSds();
+  spreadPick.disconnect = gradeDisconnect(spreadPick.edge, {
+    projection: sim.marginMean,
+    line: spreadPick.line,
+    sd: MARGIN_SD,
+  });
+  totalPick.disconnect = gradeDisconnect(totalPick.edge, {
+    projection: sim.totalMean,
+    line: totalPick.line,
+    sd: TOTAL_SD,
+  });
+  mlPick.disconnect = gradeDisconnect(mlPick.edge);
+  if (upsetPick) upsetPick.disconnect = gradeDisconnect(upsetPick.edge);
+  for (const { pick, detail } of props) {
+    pick.disconnect = gradeDisconnect(pick.edge, {
+      projection: detail.projection,
+      line: detail.line,
+      sd: propSds[detail.market as keyof typeof propSds],
+    });
+  }
+  propPickFlat.disconnect =
+    props.find((p) => p.pick === propPickFlat)?.pick.disconnect ??
+    gradeDisconnect(propPickFlat.edge, {
+      projection: propDetail.projection,
+      line: propDetail.line,
+      sd: propSds[propDetail.market as keyof typeof propSds],
+    });
+
+  // Narrative lane: tag picks aligned with the projected game script. News lane:
+  // label a prop whose player has a structured beat-writer/role signal.
+  const script = computeGameScript(sim, game.home, game.away);
+  const overSide = (s: string) => /over/i.test(s);
+  if (totalPick.situational) {
+    totalPick.narrative = true;
+    totalPick.scriptTag = totalPick.situational;
+  } else if (
+    (totalPick.side === 'over' && script.scoring === 'high') ||
+    (totalPick.side === 'under' && script.scoring === 'low')
+  ) {
+    totalPick.narrative = true;
+    totalPick.scriptTag = script.tags[0];
+  }
+  const tagProp = (pick: ModelPick, side: string, player: string) => {
+    const sig = game.playerSignals?.[player.toLowerCase()];
+    if (sig) pick.note = sig.reason;
+    if (
+      (overSide(side) && script.scoring === 'high') ||
+      (!overSide(side) && script.scoring === 'low')
+    ) {
+      pick.narrative = true;
+      pick.scriptTag = script.tags[0];
+    }
+  };
+  for (const { pick, detail } of props) tagProp(pick, detail.side, detail.player);
+  tagProp(propPickFlat, propDetail.side, propDetail.player);
+
+  // Always surface the single best scorer; add a 2nd/3rd ONLY when they carry real
+  // value (+EV or a news signal) — narrative-only extras don't pad the card. So
+  // most games show 1, a couple show 2-3 when there's genuine upside.
+  const top = longshotTds[0];
+  const extras = longshotTds.slice(1).filter((p) => p.ev >= 0.02 || !!p.note).slice(0, 2);
+  const anytimeTds = top ? [top, ...extras] : [];
 
   return {
     game,
@@ -211,6 +284,7 @@ export function analyzeGame(
     anytimeTdLongshot,
     anytimeTds,
     topPick,
+    script,
   };
 }
 
@@ -420,12 +494,26 @@ function evaluateAnytimeTds(
   // Usage share (from yards lines) to concentrate team scoring into featured players.
   const usage = new Map<string, number>();
   const teamUsage: Partial<Record<string, number>> = {};
+  const rushW = new Map<string, number>();
+  const recW = new Map<string, number>();
   for (const p of props) {
     if (p.market !== 'Rush Yards' && p.market !== 'Receiving Yards') continue;
+    // Next man up: an OUT player's workload vacates, so his share redistributes to
+    // teammates (raising the backup's TD prob) instead of diluting the pool.
+    if (out.has(p.player.toLowerCase())) continue;
+    const k = p.player.toLowerCase();
     const w = p.market === 'Rush Yards' ? p.line * 1.15 : p.line; // rushing scores slightly more
-    usage.set(p.player.toLowerCase(), (usage.get(p.player.toLowerCase()) ?? 0) + w);
+    usage.set(k, (usage.get(k) ?? 0) + w);
     teamUsage[p.team] = (teamUsage[p.team] ?? 0) + w;
+    if (p.market === 'Rush Yards') rushW.set(k, (rushW.get(k) ?? 0) + p.line);
+    else recW.set(k, (recW.get(k) ?? 0) + p.line);
   }
+
+  // Projected game script: in a blowout the leader runs clock (lead RB rush TDs ↑)
+  // and the trailer throws to catch up (pass-catcher receiving TDs ↑).
+  const blowout = Math.abs(sim.marginMean) >= 10;
+  const leader = sim.marginMean > 0 ? game.home : game.away;
+  const trailer = sim.marginMean > 0 ? game.away : game.home;
 
   const mktHome = (con.total - con.spread) / 2;
   const mktAway = (con.total + con.spread) / 2;
@@ -451,12 +539,48 @@ function evaluateAnytimeTds(
     // Vig-free market anchor, then apply our tilts, then calibrate back toward the
     // (well-priced) market so featured-player enthusiasm can't over-rate a scorer.
     const anchor = Math.min(0.95, impliedProb * DEVIG);
-    const raw = anchor * teamFactor * usageTilt;
-    const prob = calibrateTdProb(raw, anchor, tdCal);
+    // Blowout game-script tilt (bounded): clock-killing lead RB / chasing trailer's
+    // pass-catchers get a modest bump — a real second-order effect the base usage
+    // model doesn't capture.
+    let scriptMult = 1;
+    let scriptTag: string | undefined;
+    if (blowout) {
+      const rW = rushW.get(k) ?? 0;
+      const cW = recW.get(k) ?? 0;
+      if (c.team === leader && rW >= cW && rW > 0) {
+        scriptMult = 1.12;
+        scriptTag = 'blowout: lead-team run ↑';
+      } else if (c.team === trailer && cW > rW && cW > 0) {
+        scriptMult = 1.1;
+        scriptTag = 'blowout: trail-team pass ↑';
+      }
+    }
+    const raw = anchor * teamFactor * usageTilt * scriptMult;
+    let prob = calibrateTdProb(raw, anchor, tdCal);
+
+    // Structured beat-writer/role signal. A lead/goal-line promotion gives an
+    // INDEPENDENT TD floor that can exceed the market anchor — the real disconnect
+    // when the price hasn't caught up to the role. Role up/down is a bounded nudge.
+    const sig = game.playerSignals?.[k];
+    if (sig) {
+      if (sig.lead) {
+        const teamTDs = Math.max(1, ourImplied / 7);
+        const indep = Math.max(0.2, Math.min(0.55, 0.14 + 0.1 * teamTDs));
+        prob = Math.min(0.6, Math.max(prob, 0.5 * prob + 0.5 * indep));
+      }
+      if (sig.roleBoost !== 1) prob = Math.max(0.01, Math.min(0.75, prob * sig.roleBoost));
+    }
+    // Narrative lane: blowout usage tilt OR a high-scoring team tailwind.
+    if (!scriptTag && ourImplied >= 27) scriptTag = `high-scoring (${c.team})`;
+    const note = sig?.reason; // news lane only — kept separate from narrative
+    const narrative = !!scriptTag;
+
     const profit = americanToProfit(c.price);
     const ev = prob * profit - (1 - prob);
     const edge = prob - impliedProb;
-    const units = Math.min(0.5, kellyUnits(prob, c.price)); // longshot variance: cap at 0.5u
+    // Longshot sizing: quarter-Kelly, hard-capped small so a single news-driven
+    // read can never over-stake a lottery ticket. Profit comes from +EV + volume.
+    const units = Math.min(0.4, kellyUnits(prob, c.price));
     picks.push({
       player: c.player,
       team: c.team,
@@ -467,26 +591,13 @@ function evaluateAnytimeTds(
       edge,
       ev,
       units,
-      trueUnits: sharpUnits(prob, c.price),
+      trueUnits: sharpUnits(prob, c.price, 0.25, 1), // cap 1u on longshots
+      note,
+      narrative,
+      scriptTag,
     });
   }
   return picks;
-}
-
-function maxEv(picks: AnytimeTdPick[]): AnytimeTdPick | undefined {
-  return picks.reduce<AnytimeTdPick | undefined>(
-    (best, p) => (!best || p.ev > best.ev ? p : best),
-    undefined,
-  );
-}
-
-/** Rank longshots by EV weighted toward likelihood — profitable but as live as possible. */
-function bestLongshot(picks: AnytimeTdPick[]): AnytimeTdPick | undefined {
-  const score = (p: AnytimeTdPick) => p.ev * (1 + p.prob);
-  return picks.reduce<AnytimeTdPick | undefined>(
-    (best, p) => (!best || score(p) > score(best) ? p : best),
-    undefined,
-  );
 }
 
 function detectUpset(game: Game, sim: GameSim, conSpread: number): ModelPick | undefined {

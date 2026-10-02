@@ -5,6 +5,9 @@ import { fetchEspnWeek } from '@/lib/espn';
 import { bestProp, propKey } from '@/lib/props';
 import { getInjuries, getRestDays, type TeamInjuries } from '@/lib/proxies';
 import { getWeatherForGames, classifyWeather } from '@/lib/weather';
+import { getWire } from '@/lib/news';
+import { buildPlayerSignals } from '@/lib/player-signals';
+import { hoursToKickoff } from '@/lib/kickoff';
 import { memo } from '@/lib/cache';
 import { type PropMarket } from '@/data/props';
 import { MANUAL_PROP_LINES } from '@/data/liveProps';
@@ -94,6 +97,49 @@ export async function getGames(week?: number): Promise<GamesResult> {
   return memo(`games-${targetWeek}`, 45_000, () => computeGames(targetWeek));
 }
 
+// Attach structured beat-writer/role signals to pre-kickoff games. Best-effort,
+// bounded to the soonest games, and time-capped so news NEVER blocks a render —
+// if the wire is slow the cache fills in the background and signals appear next load.
+async function attachPlayerSignals(games: Game[]): Promise<Game[]> {
+  const soon = games
+    .filter((g) => g.status !== 'post' && hoursToKickoff(g.kickoff) > 0 && hoursToKickoff(g.kickoff) < 120)
+    .sort((a, b) => hoursToKickoff(a.kickoff) - hoursToKickoff(b.kickoff))
+    .slice(0, 12); // cap the per-team news fetches to the imminent slate
+  if (!soon.length) return games;
+  const teams = [...new Set(soon.flatMap((g) => [g.home, g.away]))];
+  let wire: Awaited<ReturnType<typeof getWire>>;
+  try {
+    // Hard 6s cap: abandoned fetches keep warming the memo for the next render.
+    wire = await Promise.race([
+      getWire(teams),
+      new Promise<Awaited<ReturnType<typeof getWire>>>((resolve) =>
+        setTimeout(() => resolve([]), 6000),
+      ),
+    ]);
+  } catch {
+    return games;
+  }
+  if (!wire.length) return games;
+  const soonSet = new Set(soon);
+  return games.map((g) => {
+    if (!soonSet.has(g)) return g;
+    const players = [
+      ...(g.anytimeTdCandidates ?? []).map((c) => c.player),
+      ...(g.livePropCandidates ?? []).map((c) => c.player),
+    ];
+    const signals = buildPlayerSignals(wire, players);
+    if (!Object.keys(signals).length) return g;
+    const outFromNews = Object.values(signals)
+      .filter((s) => s.status === 'out')
+      .map((s) => s.player);
+    return {
+      ...g,
+      playerSignals: signals,
+      outPlayers: [...new Set([...(g.outPlayers ?? []), ...outFromNews])],
+    };
+  });
+}
+
 async function computeGames(targetWeek: number): Promise<GamesResult> {
   const key = process.env.ODDS_API_KEY;
 
@@ -125,6 +171,10 @@ async function computeGames(targetWeek: number): Promise<GamesResult> {
         },
       };
     });
+
+    // Structured beat-writer/role signals (next-man-up, goal-line role, ruled
+    // out) for games kicking off soon. Best-effort: never blocks the slate.
+    games = await attachPlayerSignals(games);
 
     // Optional: exact lines from The Odds API (paid key) override the DK feed.
     if (games.length && key && process.env.ODDS_API_PROPS !== 'false') {

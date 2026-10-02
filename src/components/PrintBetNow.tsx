@@ -93,7 +93,7 @@ export default function PrintBetNow({
                 <th className="c-type">Type</th>
                 <th className="c-sel">Selection</th>
                 <th className="c-num">Conf</th>
-                <th className="c-num">Edge</th>
+                <th className="c-num">Value</th>
                 <th className="c-odds">Odds</th>
                 <th className="c-num">Target</th>
                 <th className="c-num">Have</th>
@@ -109,7 +109,7 @@ export default function PrintBetNow({
                     <td className="c-type">{r.pickType}</td>
                     <td className="c-sel">{selOf(r)}</td>
                     <td className="c-num">{r.confidence ? `${r.confidence}%` : '—'}</td>
-                    <td className="c-num c-edge">{edgeCell(r.edge)}</td>
+                    <td className="c-num c-edge">{r.disconnect ? r.disconnect.label : edgeCell(r.edge)}</td>
                     <td className="c-odds">{formatOdds(r.price)}</td>
                     <td className="c-num">{r.stakeUnits > 0 ? `${r.stakeUnits.toFixed(2)}u` : '—'}</td>
                     <td className="c-num">{onPick > 0 ? `${onPick.toFixed(2)}u` : '—'}</td>

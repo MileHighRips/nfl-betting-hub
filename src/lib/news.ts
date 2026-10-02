@@ -123,20 +123,43 @@ function parseGoogleNews(xml: string, team: TeamAbbr): NewsItem[] {
 
 async function fetchTeamNews(team: TeamAbbr): Promise<NewsItem[]> {
   const t = TEAMS[team];
-  const q = encodeURIComponent(
-    `"${t.city} ${t.name}" (injury OR inactive OR questionable OR "ruled out" OR doubtful OR ` +
-      `"did not practice" OR "limited practice" OR "practice report" OR camp OR beat) when:4d`,
+  const base = `"${t.city} ${t.name}"`;
+  // Two targeted beat-writer queries: (1) availability/injury, (2) role/usage/
+  // depth-chart — the second is the real alpha for props & TD scorers.
+  const queries = [
+    `${base} (injury OR inactive OR questionable OR "ruled out" OR doubtful OR "did not practice" OR ` +
+      `"limited practice" OR "practice report" OR "game-time decision" OR IR) when:5d`,
+    `${base} ("depth chart" OR "snap count" OR "goal line" OR "red zone" OR starter OR promoted OR ` +
+      `elevated OR "lead back" OR "every-down" OR workload OR carries OR targets OR "will start" OR ` +
+      `benched OR committee OR "next man up" OR "RB1" OR "WR1") when:5d`,
+    // Hyper-local: practice participation + what the head coach said at the podium.
+    `${base} ("injury report" OR "did not participate" OR "limited participant" OR "full participant" OR ` +
+      `"head coach" OR "coach said" OR presser OR "press conference" OR podium OR "designated to return" OR ` +
+      `activated OR "ruled doubtful" OR "expected to play" OR "expected to miss") when:5d`,
+  ];
+  const lists = await Promise.all(
+    queries.map(async (q) => {
+      try {
+        const res = await fetch(
+          `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`,
+          { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 300 } },
+        );
+        if (!res.ok) return [] as NewsItem[];
+        return parseGoogleNews(await res.text(), team).slice(0, 8);
+      } catch {
+        return [] as NewsItem[];
+      }
+    }),
   );
-  try {
-    const res = await fetch(
-      `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`,
-      { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 300 } },
-    );
-    if (!res.ok) return [];
-    return parseGoogleNews(await res.text(), team).slice(0, 6);
-  } catch {
-    return [];
+  const seen = new Set<string>();
+  const out: NewsItem[] = [];
+  for (const n of lists.flat()) {
+    const k = n.headline.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(n);
   }
+  return out.slice(0, 20);
 }
 
 /** Beat-writer + local news for the given teams, injury/inactive-focused, deduped. */
@@ -161,6 +184,11 @@ export async function getTeamNews(teams: TeamAbbr[]): Promise<NewsItem[]> {
 const LEAGUE_FEEDS: [string, string][] = [
   ['ProFootballTalk', 'https://profootballtalk.nbcsports.com/feed/'],
   ['CBS Sports', 'https://www.cbssports.com/rss/headlines/nfl/'],
+  ['Yahoo Sports', 'https://sports.yahoo.com/nfl/rss.xml'],
+  ['ESPN', 'https://www.espn.com/espn/rss/nfl/news'],
+  ['SB Nation', 'https://www.sbnation.com/rss/nfl/index.xml'],
+  ['Yardbarker', 'https://www.yardbarker.com/rss/sport/nfl'],
+  ['Rotowire', 'https://www.rotowire.com/rss/news.php?sport=NFL'],
 ];
 
 function parseRss(xml: string, sourceName: string): NewsItem[] {

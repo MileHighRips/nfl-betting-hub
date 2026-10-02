@@ -124,6 +124,8 @@ export interface Game {
   anytimeTdCandidates?: { player: string; team: TeamAbbr; price: number }[];
   /** Names of players ruled out (from the injuries proxy) — excluded from props. */
   outPlayers?: string[];
+  /** Structured beat-writer/role signals keyed by lowercased player name. */
+  playerSignals?: Record<string, import('./player-signals').PlayerSignal>;
 }
 
 export interface GameContext {
@@ -164,6 +166,14 @@ export interface ModelPick {
   propMarket?: string;
   isUnderdogUpset?: boolean;
   situational?: string; // validated situational edge tag (e.g. rest/blowout total)
+  /** Market-disconnect score (magnitude of value vs the price). */
+  disconnect?: import('./disconnect').Disconnect;
+  /** Aligned with the projected game script (situational/blowout/scoring). */
+  narrative?: boolean;
+  /** Game-script note for display (e.g. "blowout: trail-team pass ↑"). */
+  scriptTag?: string;
+  /** Structured beat-writer/role signal reason (news lane). */
+  note?: string;
   factors: ModelFactor[];
 }
 

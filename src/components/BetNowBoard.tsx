@@ -9,6 +9,8 @@ import { americanToProb } from '@/lib/odds';
 import { hoursToKickoff, timingAdvice, untilLabel, type TimingStage } from '@/lib/kickoff';
 import type { NewsItem } from '@/lib/news';
 import type { PickType, PlacedBet } from '@/lib/types';
+import type { Disconnect } from '@/lib/disconnect';
+import { classifyBet, type BetTierKey } from '@/lib/bet-tier';
 
 export interface BetNowRow {
   key: string;
@@ -28,6 +30,11 @@ export interface BetNowRow {
   propMarket?: string;
   situational?: string;
   day?: string;
+  disconnect?: Disconnect;
+  signal?: string;
+  narrative?: boolean;
+  floorExempt?: boolean;
+  longshot?: boolean;
   move?: { open: number; now: number; moved: number; state: 'stale' | 'steam' | 'toward' | 'away' | 'flat'; label: string };
 }
 
@@ -46,8 +53,35 @@ const STAGE_STYLE: Record<TimingStage, string> = {
   closing: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
 };
 
-const FILTERS: { key: 'all' | 'bet-now' | 'strong'; label: string }[] = [
+const DISCONNECT_STYLE: Record<Disconnect['tier'], string> = {
+  strong: 'border-fuchsia-500/50 bg-fuchsia-500/10 text-fuchsia-300',
+  value: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  lean: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
+  fair: 'border-zinc-600/50 bg-zinc-700/20 text-zinc-500',
+};
+
+const TIER_STYLE: Record<BetTierKey, string> = {
+  mega: 'border-amber-400/70 bg-amber-400/15 text-amber-200',
+  awesome: 'border-violet-500/60 bg-violet-500/15 text-violet-200',
+  ev: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  news: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+  narrative: 'border-orange-500/40 bg-orange-500/10 text-orange-300',
+  none: 'hidden',
+};
+
+const TIER_ICON: Record<BetTierKey, string> = {
+  mega: '🏆 ',
+  awesome: '⭐ ',
+  ev: '',
+  news: '',
+  narrative: '',
+  none: '',
+};
+
+const FILTERS: { key: 'all' | 'mega' | 'awesome' | 'bet-now' | 'strong'; label: string }[] = [
   { key: 'all', label: 'All value' },
+  { key: 'mega', label: '🏆 Mega' },
+  { key: 'awesome', label: '⭐ Awesome+' },
   { key: 'bet-now', label: 'Bet Now' },
   { key: 'strong', label: 'Strong (5%+)' },
 ];
@@ -64,7 +98,7 @@ export default function BetNowBoard({
   season: number;
   news?: NewsItem[];
 }) {
-  const [filter, setFilter] = useState<'all' | 'bet-now' | 'strong'>('all');
+  const [filter, setFilter] = useState<'all' | 'mega' | 'awesome' | 'bet-now' | 'strong'>('all');
   // Default to a clean board each day: only unplaced (New) and re-bet picks show;
   // fully-placed picks drop off automatically (bankroll store knows what's down).
   const [hidePlaced, setHidePlaced] = useState(true);
@@ -194,6 +228,15 @@ export default function BetNowBoard({
     if (hidePlaced && placed) return false;
     if (filter === 'bet-now') return advice.stage === 'bet-now';
     if (filter === 'strong') return row.edge >= 0.05;
+    if (filter === 'mega' || filter === 'awesome') {
+      const t = classifyBet({
+        edge: row.edge,
+        disconnect: row.disconnect,
+        hasSignal: !!row.signal,
+        narrative: row.narrative,
+      });
+      return filter === 'mega' ? t.key === 'mega' : t.count >= 2;
+    }
     return true;
   });
 
@@ -307,9 +350,34 @@ export default function BetNowBoard({
                 <span className="text-[10px] tracking-widest text-zinc-500 uppercase">
                   {row.pickType}
                 </span>
+                {(() => {
+                  const t = classifyBet({
+                    edge: row.edge,
+                    disconnect: row.disconnect,
+                    hasSignal: !!row.signal,
+                    narrative: row.narrative,
+                  });
+                  return t.key !== 'none' && t.count >= 1 ? (
+                    <span
+                      className={clsx(
+                        'rounded-md border px-1.5 py-0.5 text-[10px] font-bold',
+                        TIER_STYLE[t.key],
+                      )}
+                      title={`EV:${t.ev ? '✓' : '–'} News:${t.news ? '✓' : '–'} Narrative:${t.narrative ? '✓' : '–'}`}
+                    >
+                      {TIER_ICON[t.key]}
+                      {t.label}
+                    </span>
+                  ) : null;
+                })()}
                 {isNew && (
                   <span className="rounded-md border border-sky-500/50 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
                     New
+                  </span>
+                )}
+                {row.longshot && (
+                  <span className="rounded-md border border-fuchsia-500/50 bg-fuchsia-500/10 px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-300">
+                    🎟️ Longshot
                   </span>
                 )}
                 <span className="text-[10px] text-zinc-500">{row.matchup}</span>
@@ -337,6 +405,26 @@ export default function BetNowBoard({
                 {row.situational && (
                   <span className="rounded-md border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300">
                     {row.situational}
+                  </span>
+                )}
+                {row.disconnect && row.disconnect.tier !== 'fair' && (
+                  <span
+                    className={clsx(
+                      'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                      DISCONNECT_STYLE[row.disconnect.tier],
+                    )}
+                    title="Market disconnect — how far our number is from the price"
+                  >
+                    {row.disconnect.tier === 'strong' ? '🔥 ' : ''}
+                    {row.disconnect.label}
+                  </span>
+                )}
+                {row.signal && (
+                  <span
+                    className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"
+                    title="Structured beat-writer/role signal feeding the model"
+                  >
+                    📰 {row.signal}
                   </span>
                 )}
                 {row.move && (

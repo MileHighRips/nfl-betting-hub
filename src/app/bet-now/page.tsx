@@ -77,6 +77,9 @@ function collectRows(a: GameAnalysis, week: number): BetNowRow[] {
       player?: string;
       propMarket?: string;
       situational?: string;
+      disconnect?: import('@/lib/disconnect').Disconnect;
+      note?: string;
+      narrative?: boolean;
     },
     move?: LineMovement,
   ) => {
@@ -99,6 +102,9 @@ function collectRows(a: GameAnalysis, week: number): BetNowRow[] {
       player: pick.player,
       propMarket: pick.propMarket,
       situational: pick.situational,
+      disconnect: pick.disconnect,
+      signal: pick.note,
+      narrative: pick.narrative,
       move,
     });
   };
@@ -107,7 +113,7 @@ function collectRows(a: GameAnalysis, week: number): BetNowRow[] {
   addPick('Spread', a.spread, spreadMovement(book, a.spread.edge));
   addPick('Total', a.total, totalMovement(book, a.total.edge));
   addPick('Moneyline', a.moneyline);
-  if (a.upset) addPick('Upset', a.upset);
+  // Upset is just an underdog ML — redundant with the Moneyline pick, so not surfaced.
   for (const { pick, detail } of a.props) {
     if (stakeOf(pick) <= 0) continue;
     rows.push({
@@ -126,6 +132,9 @@ function collectRows(a: GameAnalysis, week: number): BetNowRow[] {
       line: pick.line,
       player: detail.player,
       propMarket: detail.market,
+      disconnect: pick.disconnect,
+      signal: pick.note,
+      narrative: pick.narrative,
     });
   }
   for (const td of a.anytimeTds) {
@@ -144,6 +153,35 @@ function collectRows(a: GameAnalysis, week: number): BetNowRow[] {
       confidence: Math.round(td.prob * 100),
       gameId: a.game.id,
       player: td.player,
+      disconnect: td.disconnect,
+      signal: td.note,
+      narrative: td.narrative,
+      // ATD edges are tiny by nature — exempt from the sides/totals edge floor.
+      floorExempt: true,
+      longshot: td.price >= 600,
+    });
+  }
+  // Dedicated big-payout longshot (best +EV scorer), surfaced even if thin-edge.
+  const ls = a.anytimeTdLongshot;
+  if (ls && !a.anytimeTds.some((t) => t.player === ls.player) && stakeOf(ls) > 0) {
+    rows.push({
+      key: `${a.game.id}-atd-ls-${ls.player}`,
+      matchup,
+      kickoff,
+      pickType: 'Anytime TD',
+      description: `${ls.player} Anytime TD (${matchup})`,
+      market: `Week ${week} · Anytime TD`,
+      price: ls.price,
+      stakeUnits: stakeOf(ls),
+      edge: ls.edge,
+      confidence: Math.round(ls.prob * 100),
+      gameId: a.game.id,
+      player: ls.player,
+      disconnect: ls.disconnect,
+      signal: ls.note,
+      narrative: ls.narrative,
+      floorExempt: true,
+      longshot: true,
     });
   }
   // Same-game parlay (correlated legs) from the live DK feed.
@@ -223,10 +261,10 @@ export default async function BetNowPage({
   const rows = sorted.flatMap((a) =>
     collectRows(a, week).map((r) => ({ ...r, day: dayLabelOf(a.game.kickoff) })),
   );
-  // A bet earns a spot here only with genuine price value (edge vs the current
-  // number) — the proxy for expected positive CLV. No edge, no favorable move
-  // expected, so it doesn't belong on "Bet Now".
-  const valued = rows.filter((r) => r.edge >= EDGE_FLOOR);
+  // A bet earns a spot here with genuine price value (edge vs the current number).
+  // Anytime-TD rows are floor-exempt — their edges are tiny by nature and the model
+  // already gates them on EV / News+Narrative conviction.
+  const valued = rows.filter((r) => r.edge >= EDGE_FLOOR || r.floorExempt);
 
   // Beat-writer wire (per-team Google News + national feeds), soonest teams first.
   const newsTeams = [...new Set(sorted.slice(0, 6).flatMap((a) => [a.game.home, a.game.away]))];

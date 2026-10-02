@@ -10,6 +10,48 @@ import PlaceBetButton from './PlaceBetButton';
 import LockToggle from './LockToggle';
 import type { ModelPick } from '@/lib/types';
 import type { ParlaySuggestion } from '@/lib/parlays';
+import { classifyBet, type BetTierKey } from '@/lib/bet-tier';
+
+const TIER_STYLE: Record<BetTierKey, string> = {
+  mega: 'border-amber-400/70 bg-amber-400/15 text-amber-200',
+  awesome: 'border-violet-500/60 bg-violet-500/15 text-violet-200',
+  ev: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  news: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+  narrative: 'border-orange-500/40 bg-orange-500/10 text-orange-300',
+  none: 'hidden',
+};
+const TIER_ICON: Record<BetTierKey, string> = {
+  mega: '🏆 ',
+  awesome: '⭐ ',
+  ev: '',
+  news: '',
+  narrative: '',
+  none: '',
+};
+
+function TierBadge({
+  edge,
+  disconnect,
+  hasSignal,
+  narrative,
+}: {
+  edge: number;
+  disconnect?: ModelPick['disconnect'];
+  hasSignal?: boolean;
+  narrative?: boolean;
+}) {
+  const t = classifyBet({ edge, disconnect, hasSignal, narrative });
+  if (t.key === 'none') return null;
+  return (
+    <span
+      className={clsx('rounded-md border px-1.5 py-0.5 text-[10px] font-bold', TIER_STYLE[t.key])}
+      title={`EV:${t.ev ? '✓' : '–'} News:${t.news ? '✓' : '–'} Narrative:${t.narrative ? '✓' : '–'}`}
+    >
+      {TIER_ICON[t.key]}
+      {t.label}
+    </span>
+  );
+}
 
 export function ResultBadge({ result }: { result?: PickResult }) {
   if (!result) return null;
@@ -50,13 +92,19 @@ function PickRow({
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] tracking-widest text-zinc-500 uppercase">{label}</span>
           {edgePos && (
             <span className="text-[10px] font-semibold text-emerald-400">
               +{(pick.edge * 100).toFixed(1)}% edge
             </span>
           )}
+          <TierBadge
+            edge={pick.edge}
+            disconnect={pick.disconnect}
+            hasSignal={!!pick.note}
+            narrative={pick.narrative}
+          />
           <ResultBadge result={result} />
         </div>
         <div className="mt-0.5 truncate text-sm font-semibold text-white">{pick.selection}</div>
@@ -103,6 +151,13 @@ export default function GameCard({
   const away = TEAMS[game.away];
   const matchup = `${away.abbr} @ ${home.abbr}`;
   const dk = game.books.find((b) => b.book === 'DraftKings') ?? game.books[0];
+
+  // Surface the model's best big-payout +EV scorer alongside the core ATDs.
+  const atdList = [...a.anytimeTds];
+  const lsPlayer = a.anytimeTdLongshot?.player;
+  if (a.anytimeTdLongshot && !atdList.some((t) => t.player === lsPlayer)) {
+    atdList.push(a.anytimeTdLongshot);
+  }
 
   return (
     <div className="card card-hover overflow-hidden">
@@ -183,6 +238,21 @@ export default function GameCard({
         </span>
       </div>
 
+      {/* Game-script narrative (derived from the sim — high/low scoring, blowout) */}
+      {a.script && a.script.tags.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]/20 px-4 py-2 text-[11px]">
+          <span className="tracking-widest text-zinc-500 uppercase">Script</span>
+          {a.script.tags.map((t, i) => (
+            <span
+              key={i}
+              className="rounded-md border border-orange-500/30 bg-orange-500/10 px-1.5 py-0.5 font-semibold text-orange-300"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Model picks */}
       <div className="space-y-2 px-4 pb-3">
         <PickRow
@@ -210,8 +280,8 @@ export default function GameCard({
         )}
       </div>
 
-      {/* Upset alert */}
-      {a.upset && (
+      {/* Upset alert — frozen locked games only; for live games it duplicates the ML pick */}
+      {a.upset && a.locked && (
         <div className="mx-4 mb-3 flex flex-col gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 sm:flex-row sm:items-center">
           <AlertTriangle size={18} className="text-amber-400" />
           <div className="min-w-0 flex-1">
@@ -267,6 +337,12 @@ export default function GameCard({
                         +{(pick.edge * 100).toFixed(1)}%
                       </span>
                     )}
+                    <TierBadge
+                      edge={pick.edge}
+                      disconnect={pick.disconnect}
+                      hasSignal={!!pick.note}
+                      narrative={pick.narrative}
+                    />
                     {i === 0 && a.locked && <ResultBadge result={grades?.prop} />}
                   </div>
                   <div className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{detail.rationale}</div>
@@ -307,16 +383,17 @@ export default function GameCard({
       </div>
 
       {/* Anytime TDs (multiple scorers when there's value) */}
-      {a.anytimeTds.length > 0 && (
+      {atdList.length > 0 && (
         <div className="border-t border-[var(--color-border)] px-4 py-3">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-[10px] tracking-widest text-orange-400 uppercase">
-              {a.anytimeTds.length > 1 ? 'Anytime TD Value' : 'Anytime TD'}
+              {atdList.length > 1 ? 'Anytime TD Value' : 'Anytime TD'}
             </span>
           </div>
           <div className="space-y-2">
-            {a.anytimeTds.map((td, i) => {
+            {atdList.map((td, i) => {
               const stake = stakeOf(td);
+              const isLongshot = td.player === lsPlayer && !a.anytimeTds.some((x) => x.player === lsPlayer);
               const tdGrade =
                 td.player === a.anytimeTd?.player
                   ? grades?.anytimeTd
@@ -329,11 +406,27 @@ export default function GameCard({
                   className="flex flex-col gap-2 sm:flex-row sm:items-center"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-bold text-white">{td.player}</span>
                       {td.ev > 0 && (
                         <span className="text-[10px] font-semibold text-emerald-400">
                           +{(td.ev * 100).toFixed(0)}% EV
+                        </span>
+                      )}
+                      {isLongshot && (
+                        <span className="rounded-md border border-fuchsia-500/50 bg-fuchsia-500/10 px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-300">
+                          🎟️ Longshot
+                        </span>
+                      )}
+                      <TierBadge
+                        edge={td.edge}
+                        disconnect={td.disconnect}
+                        hasSignal={!!td.note}
+                        narrative={td.narrative}
+                      />
+                      {td.note && (
+                        <span className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
+                          📰 {td.note}
                         </span>
                       )}
                       {a.locked && <ResultBadge result={tdGrade} />}
