@@ -11,6 +11,7 @@ import LockToggle from './LockToggle';
 import type { ModelPick } from '@/lib/types';
 import type { ParlaySuggestion } from '@/lib/parlays';
 import { classifyBet, type BetTierKey } from '@/lib/bet-tier';
+import { opposingPriceForPick } from '@/lib/market-quote';
 
 const TIER_STYLE: Record<BetTierKey, string> = {
   mega: 'border-amber-400/70 bg-amber-400/15 text-amber-200',
@@ -79,12 +80,16 @@ function PickRow({
   pick,
   matchup,
   week,
+  kickoff,
+  opposingPrice,
   result,
 }: {
   label: string;
   pick: ModelPick;
   matchup: string;
   week: number;
+  kickoff: string;
+  opposingPrice?: number;
   result?: PickResult;
 }) {
   const edgePos = pick.edge > 0;
@@ -121,6 +126,10 @@ function PickRow({
             price={pick.price}
             stakeUnits={stake}
             confidence={pick.confidence}
+            marketProb={pick.marketProb}
+            opposingPrice={opposingPrice}
+            book={pick.book}
+            kickoff={kickoff}
             source="model"
             gameId={pick.gameId}
             pickType={pick.type}
@@ -260,6 +269,8 @@ export default function GameCard({
           pick={a.spread}
           matchup={matchup}
           week={game.week}
+          kickoff={game.kickoff}
+          opposingPrice={opposingPriceForPick(game, a.spread)}
           result={grades?.spread}
         />
         <PickRow
@@ -267,6 +278,8 @@ export default function GameCard({
           pick={a.total}
           matchup={matchup}
           week={game.week}
+          kickoff={game.kickoff}
+          opposingPrice={opposingPriceForPick(game, a.total)}
           result={grades?.total}
         />
         {a.moneyline.confidence >= a.spread.confidence && (
@@ -275,6 +288,8 @@ export default function GameCard({
             pick={a.moneyline}
             matchup={matchup}
             week={game.week}
+            kickoff={game.kickoff}
+            opposingPrice={opposingPriceForPick(game, a.moneyline)}
             result={grades?.moneyline}
           />
         )}
@@ -300,6 +315,10 @@ export default function GameCard({
               price={a.upset.price}
               stakeUnits={stakeOf(a.upset)}
               confidence={a.upset.confidence}
+              marketProb={a.upset.marketProb}
+              opposingPrice={opposingPriceForPick(game, a.upset)}
+              book={a.upset.book}
+              kickoff={game.kickoff}
               source="model"
               gameId={a.upset.gameId}
               pickType={a.upset.type}
@@ -330,7 +349,10 @@ export default function GameCard({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold text-white">
-                      {detail.player} · {detail.side} {detail.line} {detail.market}
+                      {detail.player} ·{' '}
+                      {detail.alt
+                        ? `${detail.line}+ ${detail.market}`
+                        : `${detail.side} ${detail.line} ${detail.market}`}
                     </span>
                     {pick.edge > 0 && (
                       <span className="text-[10px] font-semibold text-emerald-400">
@@ -356,16 +378,29 @@ export default function GameCard({
                   </span>
                   {stake > 0 ? (
                     <PlaceBetButton
-                      description={`${detail.player} ${detail.side} ${detail.line} ${detail.market} (${matchup})`}
+                      description={`${detail.player} ${detail.alt ? `${detail.line}+ ${detail.market}` : `${detail.side} ${detail.line} ${detail.market}`} (${matchup})`}
                       market={`Week ${game.week} · Prop`}
                       price={detail.price}
                       stakeUnits={stake}
                       confidence={detail.confidence}
+                      marketProb={pick.marketProb}
+                      opposingPrice={opposingPriceForPick(game, {
+                        pickType: 'Prop',
+                        side: detail.side.toLowerCase(),
+                        book: pick.book,
+                        price: detail.price,
+                        line: pick.line,
+                        player: detail.player,
+                        propMarket: detail.market,
+                      })}
+                      book={pick.book}
+                      kickoff={game.kickoff}
                       source="model"
                       gameId={pick.gameId}
                       pickType={pick.type}
                       side={detail.side.toLowerCase()}
                       line={pick.line}
+                      alternateLine={detail.alt}
                       player={detail.player}
                       propMarket={detail.market}
                     />
@@ -429,6 +464,11 @@ export default function GameCard({
                           📰 {td.note}
                         </span>
                       )}
+                      {td.caution && (
+                        <span className="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                          ⚠ {td.caution}
+                        </span>
+                      )}
                       {a.locked && <ResultBadge result={tdGrade} />}
                     </div>
                     <div className="text-xs text-zinc-500">
@@ -445,7 +485,70 @@ export default function GameCard({
                         price={td.price}
                         stakeUnits={stake}
                         confidence={Math.round(td.prob * 100)}
+                        book={td.book === 'DraftKings' ? 'DraftKings' : 'Model'}
                         source="model"
+                        gameId={game.id}
+                        kickoff={game.kickoff}
+                        player={td.player}
+                      />
+                    ) : (
+                      <span className="chip">No value</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Alternate lines: key-number spreads / strong-disconnect totals that beat the main EV */}
+      {(a.altPicks?.length ?? 0) > 0 && (
+        <div className="border-t border-cyan-500/30 bg-cyan-500/5 px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[10px] tracking-widest text-cyan-300 uppercase">Alternate Lines</span>
+          </div>
+          <div className="space-y-2">
+            {a.altPicks!.map((alt) => {
+              const stake = Number((alt.trueUnits ?? alt.units).toFixed(2));
+              return (
+                <div key={`${alt.side}-${alt.line}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-white">{alt.selection}</span>
+                      <span className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300">
+                        {alt.reason}
+                      </span>
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      {Math.round(alt.modelProb * 100)}% model · mkt {Math.round(alt.marketProb * 100)}% · beats main EV
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <OddsBadge price={alt.price} book="DraftKings" />
+                    {stake > 0 && !a.locked ? (
+                      <PlaceBetButton
+                        description={`${alt.selection} (${matchup})`}
+                        market={`Week ${game.week} · ${alt.type}`}
+                        price={alt.price}
+                        stakeUnits={stake}
+                        confidence={Math.round(alt.modelProb * 100)}
+                        marketProb={alt.marketProb}
+                        opposingPrice={opposingPriceForPick(game, {
+                          pickType: alt.type,
+                          side: alt.side,
+                          book: 'DraftKings',
+                          price: alt.price,
+                          line: alt.line,
+                        })}
+                        book="DraftKings"
+                        kickoff={game.kickoff}
+                        source="model"
+                        gameId={game.id}
+                        pickType={alt.type}
+                        side={alt.side}
+                        line={alt.line}
+                        compact
                       />
                     ) : (
                       <span className="chip">No value</span>
@@ -478,6 +581,7 @@ export default function GameCard({
                 market={`Week ${game.week} · SGP`}
                 price={sgp.americanOdds}
                 stakeUnits={Number(sgp.units.toFixed(2))}
+                book="DraftKings"
                 source="model"
                 gameId={game.id}
                 compact

@@ -182,11 +182,17 @@ export interface PlayerGameStat {
   player: string;
   team: TeamAbbr;
   passYards?: number;
+  passTD?: number;
+  passAttempts?: number;
+  completions?: number;
+  interceptions?: number;
   rushYards?: number;
+  rushAttempts?: number;
   receivingYards?: number;
   receptions?: number;
   rushTD?: number;
   recTD?: number;
+  sacks?: number;
 }
 
 interface SummaryStatGroup {
@@ -197,7 +203,7 @@ interface SummaryStatGroup {
 }
 
 interface SummaryTeamPlayers {
-  team?: {abbreviation?: string};
+  team?: { abbreviation?: string };
   statistics?: SummaryStatGroup[];
 }
 
@@ -209,7 +215,7 @@ interface SummaryTeamStat {
 /** Parse an ESPN "made-attempts" pair like "5-16" or "1-2". */
 function madeAtt(value: string | undefined): { made?: number; att?: number } {
   if (!value) return {};
-  const m = value.match(/(-?\d+)\s*-\s*(-?\d+)/);
+  const m = value.match(/(-?\d+)\s*[-/]\s*(-?\d+)/);
   if (!m) return {};
   return { made: Number(m[1]), att: Number(m[2]) };
 }
@@ -245,6 +251,12 @@ async function fetchSummary(
         const yardsIndex = labels.indexOf('YDS');
         const receptionsIndex = labels.indexOf('REC');
         const tdIndex = labels.indexOf('TD');
+        const attemptsIndex = labels.findIndex(
+          (label) => label === 'C/ATT' || label === 'COMP/ATT',
+        );
+        const rushAttemptsIndex = labels.indexOf('CAR');
+        const interceptionsIndex = labels.indexOf('INT');
+        const sacksIndex = labels.findIndex((label) => label === 'SACKS' || label === 'SK');
         for (const athlete of group.athletes ?? []) {
           const player = athlete.athlete?.displayName;
           if (!player || !athlete.stats) continue;
@@ -252,10 +264,24 @@ async function fetchSummary(
           const current = byPlayer.get(key) ?? { player, team };
           const yards = statNumber(yardsIndex >= 0 ? athlete.stats[yardsIndex] : undefined);
           const tds = statNumber(tdIndex >= 0 ? athlete.stats[tdIndex] : undefined);
-          if (category.includes('pass') && yards != null) current.passYards = yards;
+          if (category.includes('pass')) {
+            if (yards != null) current.passYards = yards;
+            if (tds != null) current.passTD = tds;
+            const attempts = madeAtt(attemptsIndex >= 0 ? athlete.stats[attemptsIndex] : undefined);
+            if (attempts.made != null) current.completions = attempts.made;
+            if (attempts.att != null) current.passAttempts = attempts.att;
+            const interceptions = statNumber(
+              interceptionsIndex >= 0 ? athlete.stats[interceptionsIndex] : undefined,
+            );
+            if (interceptions != null) current.interceptions = interceptions;
+          }
           if (category.includes('rush')) {
             if (yards != null) current.rushYards = yards;
             if (tds != null) current.rushTD = tds;
+            const attempts = statNumber(
+              rushAttemptsIndex >= 0 ? athlete.stats[rushAttemptsIndex] : undefined,
+            );
+            if (attempts != null) current.rushAttempts = attempts;
           }
           if (category.includes('receiv')) {
             if (yards != null) current.receivingYards = yards;
@@ -265,6 +291,8 @@ async function fetchSummary(
             );
             if (receptions != null) current.receptions = receptions;
           }
+          const sacks = statNumber(sacksIndex >= 0 ? athlete.stats[sacksIndex] : undefined);
+          if (sacks != null) current.sacks = sacks;
           byPlayer.set(key, current);
         }
       }

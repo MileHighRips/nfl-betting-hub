@@ -11,6 +11,7 @@ import {
 } from 'react';
 import type { PlacedBet } from './types';
 import { americanToProfit } from './odds';
+import { PLACEMENT_FEE_DOLLARS } from './betting-costs';
 
 const LS_KEY = 'nfl-hub-bets';
 const LS_UNIT = 'nfl-hub-unit';
@@ -19,10 +20,12 @@ interface BankrollState {
   bets: PlacedBet[];
   unitSize: number;
   setUnitSize: (n: number) => void;
-  placeBet: (bet: Omit<PlacedBet, 'id' | 'placedAt' | 'unitSize' | 'status'>) => void;
+  placeBet: (bet: Omit<PlacedBet, 'id' | 'placedAt' | 'unitSize' | 'status'>) => Promise<void>;
   updateStatus: (id: string, status: PlacedBet['status']) => void;
+  updateStake: (id: string, patch: { stakeUnits?: number; unitSize?: number }) => void;
   removeBet: (id: string) => void;
-  refresh: () => void;
+  refresh: (clearError?: boolean) => void;
+  syncError: string | null;
   stats: BankrollStats;
 }
 
@@ -50,23 +53,26 @@ export function computeStats(bets: PlacedBet[], unitSize: number): BankrollStats
     profit = 0,
     pendingRisk = 0;
   for (const b of bets) {
-    const risk = b.stakeUnits * b.unitSize;
+    const stake = b.stakeUnits * b.unitSize;
+    const fee = b.fee ?? 0;
     if (b.status === 'pending') {
       pending++;
-      pendingRisk += risk;
+      pendingRisk += stake + fee;
       continue;
     }
     if (b.status === 'push') {
       push++;
+      staked += fee;
+      profit -= fee;
       continue;
     }
-    staked += risk;
+    staked += stake + fee;
     if (b.status === 'won') {
       won++;
-      profit += risk * americanToProfit(b.price);
+      profit += stake * americanToProfit(b.price) - fee;
     } else if (b.status === 'lost') {
       lost++;
-      profit -= risk;
+      profit -= stake + fee;
     }
   }
   return {
@@ -87,12 +93,25 @@ export function BankrollProvider({ children }: { children: ReactNode }) {
   const [bets, setBets] = useState<PlacedBet[]>([]);
   const [unitSize, setUnitSizeState] = useState(10);
   const [hydrated, setHydrated] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((clearError = true) => {
     fetch('/api/bets')
-      .then((r) => r.json())
-      .then((d: { bets: PlacedBet[] }) => setBets(d.bets ?? []))
-      .catch(() => {})
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Tracker refresh failed with HTTP ${response.status}.`);
+        return (await response.json()) as { bets?: PlacedBet[] };
+      })
+      .then((data) => {
+        if (!Array.isArray(data.bets)) throw new Error('Tracker refresh returned invalid data.');
+        setBets(data.bets);
+        if (clearError) setSyncError(null);
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to refresh the bet tracker.', error);
+        setSyncError(
+          'Tracker could not sync with the server. Your latest changes may not be saved.',
+        );
+      })
       .finally(() => setHydrated(true));
   }, []);
 
@@ -129,47 +148,121 @@ export function BankrollProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const placeBet = useCallback<BankrollState['placeBet']>(
-    (bet) => {
+    async (bet) => {
       const full: PlacedBet = {
         ...bet,
+        fee: PLACEMENT_FEE_DOLLARS,
         id: `bet-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         placedAt: new Date().toISOString(),
         unitSize,
         status: 'pending',
       };
-      setBets((prev) => [full, ...prev]);
-      fetch('/api/bets', {
+      const response = await fetch('/api/bets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(full),
-      }).catch(() => {});
+      });
+      if (!response.ok) throw new Error(`Saving the bet failed with HTTP ${response.status}.`);
+      const result = (await response.json()) as { bets?: PlacedBet[] };
+      if (!Array.isArray(result.bets)) throw new Error('The saved bet response was invalid.');
+      setBets(result.bets);
+      setSyncError(null);
     },
     [unitSize],
   );
 
-  const updateStatus = useCallback<BankrollState['updateStatus']>((id, status) => {
-    setBets((prev) => prev.map((b) => (b.id === id ? { ...b, status, manualStatus: true } : b)));
-    fetch('/api/bets', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status }),
-    }).catch(() => {});
-  }, []);
+  const syncMutation = useCallback(
+    (request: Promise<Response>) => {
+      void request
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`Tracker update failed with HTTP ${response.status}.`);
+          return (await response.json()) as { bets?: PlacedBet[] };
+        })
+        .then((data) => {
+          if (!Array.isArray(data.bets)) throw new Error('Tracker update returned invalid data.');
+          setBets(data.bets);
+          setSyncError(null);
+        })
+        .catch((error: unknown) => {
+          console.error('Failed to update the bet tracker.', error);
+          setSyncError('Tracker update failed. Refresh to confirm the saved state.');
+          refresh(false);
+        });
+    },
+    [refresh],
+  );
 
-  const removeBet = useCallback<BankrollState['removeBet']>((id) => {
-    setBets((prev) => prev.filter((b) => b.id !== id));
-    fetch('/api/bets', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    }).catch(() => {});
-  }, []);
+  const updateStatus = useCallback<BankrollState['updateStatus']>(
+    (id, status) => {
+      setBets((prev) =>
+        prev.map((bet) => (bet.id === id ? { ...bet, status, manualStatus: true } : bet)),
+      );
+      syncMutation(
+        fetch('/api/bets', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, status }),
+        }),
+      );
+    },
+    [syncMutation],
+  );
+
+  const updateStake = useCallback<BankrollState['updateStake']>(
+    (id, patch) => {
+      setBets((prev) => prev.map((bet) => (bet.id === id ? { ...bet, ...patch } : bet)));
+      syncMutation(
+        fetch('/api/bets', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, ...patch }),
+        }),
+      );
+    },
+    [syncMutation],
+  );
+
+  const removeBet = useCallback<BankrollState['removeBet']>(
+    (id) => {
+      setBets((prev) => prev.filter((bet) => bet.id !== id));
+      syncMutation(
+        fetch('/api/bets', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        }),
+      );
+    },
+    [syncMutation],
+  );
 
   const stats = useMemo(() => computeStats(bets, unitSize), [bets, unitSize]);
 
   const value = useMemo(
-    () => ({ bets, unitSize, setUnitSize, placeBet, updateStatus, removeBet, refresh, stats }),
-    [bets, unitSize, setUnitSize, placeBet, updateStatus, removeBet, refresh, stats],
+    () => ({
+      bets,
+      unitSize,
+      setUnitSize,
+      placeBet,
+      updateStatus,
+      updateStake,
+      removeBet,
+      refresh,
+      syncError,
+      stats,
+    }),
+    [
+      bets,
+      unitSize,
+      setUnitSize,
+      placeBet,
+      updateStatus,
+      updateStake,
+      removeBet,
+      refresh,
+      syncError,
+      stats,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

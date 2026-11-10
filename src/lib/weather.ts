@@ -13,8 +13,11 @@ const DOME_TEAMS: TeamAbbr[] = ['ATL', 'DET', 'MIN', 'NO', 'LV', 'IND', 'ARI', '
 
 export interface WeatherForecast {
   windMph: number;
+  windDirectionDegrees?: number;
   precip: number; // mm at kickoff hour
   tempF: number;
+  validAt: string;
+  capturedAt: string;
 }
 
 interface OpenMeteo {
@@ -22,6 +25,7 @@ interface OpenMeteo {
     time: string[];
     precipitation: number[];
     wind_speed_10m: number[];
+    wind_direction_10m?: number[];
     temperature_2m: number[];
   };
 }
@@ -43,7 +47,7 @@ async function fetchForecast(
 ): Promise<WeatherForecast | null> {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-    `&hourly=precipitation,wind_speed_10m,temperature_2m&wind_speed_unit=mph` +
+    `&hourly=precipitation,wind_speed_10m,wind_direction_10m,temperature_2m&wind_speed_unit=mph` +
     `&temperature_unit=fahrenheit&timezone=UTC&forecast_days=16`;
   const res = await fetch(url, { next: { revalidate: 900 } });
   if (!res.ok) return null;
@@ -56,8 +60,13 @@ async function fetchForecast(
   if (idx < 0) return null;
   return {
     windMph: Math.round(h.wind_speed_10m[idx] ?? 0),
+    ...(h.wind_direction_10m?.[idx] != null
+      ? { windDirectionDegrees: Math.round(h.wind_direction_10m[idx]) }
+      : {}),
     precip: h.precipitation[idx] ?? 0,
     tempF: Math.round(h.temperature_2m[idx] ?? 60),
+    validAt: h.time[idx],
+    capturedAt: new Date().toISOString(),
   };
 }
 

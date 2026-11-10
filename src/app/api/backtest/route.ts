@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { runBacktest } from '@/lib/backtest';
+import { runLivePickBacktest } from '@/lib/live-backtest';
 
 export const dynamic = 'force-dynamic';
 
-/** Walk-forward model scoreboard. Read-only; grades past weeks, never touches locks. */
+/** Live model scoreboard based on archived Bet Now picks and saved closing lines. */
 export async function GET() {
   try {
-    const report = await runBacktest();
+    const report = await runLivePickBacktest();
     return NextResponse.json(report);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

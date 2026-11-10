@@ -79,7 +79,40 @@ use one of these:
 - **Value Board** — "sharp alerts" for the biggest mispricings, a longshot watch for great prices,
   and the week's top edges.
 - **Bet Tracker** — configurable unit size (1u = $10 to start), settle bets won/lost/push, and a
-  live record, ROI and net profit/loss. Persists to a local file **and** localStorage.
+  live record, ROI, net profit/loss, and CLV. While the Tracker is open, upcoming bets are checked
+  for pre-kickoff closing snapshots; a local server scheduler also captures lines every five minutes
+  for the active week and any week with an upcoming tracked bet while the Node server is running.
+  The same scheduler archives Bet Now picks, filtered candidates, model version, and the available
+  pregame model inputs every five minutes. Visit `/validation` to compare recommended picks with
+  candidates the filters passed on. The `Hourly model capture` GitHub Actions workflow is designed
+  to run on a hosted runner, restore the previous compressed research archive, capture markets and
+  Bet Now candidates, and publish a rolling GitHub Actions artifact. The public artifact contains
+  market history, model recommendations, and validation reports; it never includes placed bets or
+  locked picks. Artifacts expire after 90 days and older copies are removed after a successful
+  upload. Scheduled runs require the workflow to be on the default branch and Actions to be enabled.
+  GitHub may delay or skip scheduled runs, so this is periodic capture, not an always-on guarantee.
+  The authenticated capture route accepts a bearer token.
+  Configure `CRON_SECRET` only in the server environment.
+  CLV is explicitly marked unavailable if no valid pre-kickoff quote was captured; post-kickoff
+  prices are never substituted as a close. Bet Now placements save their surface, book, price, line, and
+  same-book no-vig placement probability when both sides are quoted, plus the model version and
+  model/decision probabilities. The tracker separates market CLV from odds-based comparisons and
+  averages only market CLV. Bet Now recommendations deduct the confirmed $0.50 per-ticket fee from
+  expected value; this policy is versioned separately from older archived picks. Capture pauses when the local server
+  is stopped. Persists to a local file **and** localStorage.
+- **Bet Now handicap review** — each unlocked candidate has a collapsed, optional review with its
+  quantitative/context signals, linked team news, and editable matchup/personnel,
+  situational-production, and exact line/price notes. Picks can be placed without opening or saving
+  a review. Saved reviews are tied to the exact recommendation snapshot; a changed line, price,
+  probability, or stake requires a new review. The editable draft is
+  prefilled from the prior week's ESPN box score when available, recent linked reporting, game
+  context, and the current market/model comparison; it does not auto-approve a pick. It also
+  interprets the projected score, pace, offense/defense efficiency matchup, and player-prop
+  projection as a conditional game-plan/script read. Specific coverage-shell, blitz, personnel, and
+  trench claims remain qualified because the feeds do not provide those structured details. When
+  live odds are unavailable, seed fallback recommendations are suppressed and cannot be placed or
+  archived as live picks. Locked pick snapshots remain frozen and retain their existing display and
+  placement behavior.
 - **The Model** — a full write-up of the drive-level engine, live data proxies, and Ken's models.
 
 ## The engine
@@ -92,7 +125,19 @@ a TD/FG/none, which reproduces realistic scores and push-aware key numbers.
 Factor stack: efficiency matchup · team-specific home field · rest/bye · travel & body clock ·
 **live weather (wind/precip/temp)** · **injuries (QB + skill players out)** · pace · divisional
 tightening · **in-season Elo learning** from real results. Edge = model probability − vig-free
-market probability; stakes are fractional-Kelly, **hard-capped at 1 unit**.
+market probability; until the live archive verifies calibration, stakes are blended heavily
+toward the market. Bet Now can show the strongest positive model-value side, total, and player-prop
+candidate for each game, each capped at $5; its expected-value filter deducts the confirmed $0.50
+per-ticket fee.
+Historical performance has not established that these model estimates are profitable, and multiple
+picks in one game can be correlated. The `/api/backtest` scoreboard grades archived Bet Now
+recommendations, while the Tracker persists available CLV to the bet store. Bet Now does not show
+seed fallback data as actionable picks when the live feed is offline. The live-pick archive starts
+when the default Bet Now page is visited while live odds are available; keep the local Node server
+running and revisit before kickoff to capture changes.
+The persistent scheduler captures automatically while the Node process is alive; serverless hosts
+should invoke the authenticated cron route because process-local timers may pause between requests.
+Historical picks that were never recorded cannot be reconstructed retroactively.
 
 ## Live data (free, no key)
 
@@ -100,6 +145,11 @@ The entire app runs on **free data, no key required**. From ESPN: real schedule,
 odds, scores/status, and injuries. From Open-Meteo: live wind/precip/temperature at each outdoor
 stadium. Rest/bye is derived from the schedule, and completed results feed an in-season Elo model
 that re-rates every team weekly.
+
+FanDuel's public feed also supplies a **limited, live subset** of alternate passing- and
+receiving-yard props. These are kept separate from DraftKings prices and are not a complete
+standard player-prop board. FanDuel's public player-props endpoint was unavailable during testing;
+the app only uses markets present in the working public NFL feed.
 
 Optionally, add a free key from [the-odds-api.com](https://the-odds-api.com/) to pull exact posted
 **DraftKings player-prop lines**:
@@ -132,9 +182,11 @@ Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Prettier · lucide-re
 
 ## Weekly workflow
 
-1. Update team power ratings / injuries in `src/lib/teams.ts` as results come in.
-2. Swap in the new week's matchups in `src/data/games.ts` (or rely on the live odds feed).
-3. Review the Slate & Value Board, place your picks, and settle last week's on the Tracker.
+1. Refresh the live slate, lines, injuries, rest, and weather inputs.
+2. On Bet Now, compare model-versus-market numbers with cited matchup and situational evidence;
+   approve only picks whose exact line and price still make sense, or pass.
+3. Place approved picks and settle results on the Tracker. Assess calibration with recorded CLV and
+   outcomes over many bets, not a single game's result.
 
 ---
 

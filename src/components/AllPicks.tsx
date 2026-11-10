@@ -9,7 +9,7 @@ import { ResultBadge } from './GameCard';
 import { fmtMoney } from '@/lib/format';
 import { americanToProfit } from '@/lib/odds';
 import { useBankroll } from '@/lib/store';
-import type { PickType } from '@/lib/types';
+import type { PickType, PlacedBet } from '@/lib/types';
 
 export type PickGroup = 'Spread' | 'Total' | 'Moneyline' | 'Prop' | 'Upset' | 'Anytime TD' | 'Futures';
 
@@ -22,13 +22,16 @@ export interface FlatPick {
   pickType?: PickType;
   side?: string;
   line?: number;
+  alternateLine?: boolean;
   player?: string;
   propMarket?: string;
   selection: string;
   confidence: number;
   edge: number;
+  marketProb?: number;
+  opposingPrice?: number;
   price: number;
-  book: string;
+  book: PlacedBet['book'];
   units: number;
   /** Model's true conviction stake (uncapped quarter-Kelly). */
   trueUnits: number;
@@ -311,11 +314,16 @@ export default function AllPicks({ picks }: { picks: FlatPick[] }) {
                   price={p.price}
                   stakeUnits={p.units}
                   confidence={p.confidence}
+                  marketProb={p.marketProb}
+                  opposingPrice={p.opposingPrice}
+                  book={p.book}
+                  kickoff={p.kickoff}
                   source={p.ken ? 'ken' : 'model'}
                   gameId={p.gameId}
                   pickType={p.pickType}
                   side={p.side}
                   line={p.line}
+                  alternateLine={p.alternateLine}
                   player={p.player}
                   propMarket={p.propMarket}
                   compact

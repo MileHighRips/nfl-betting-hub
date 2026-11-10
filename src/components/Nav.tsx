@@ -13,6 +13,7 @@ import {
   Coins,
   Skull,
   Zap,
+  BarChart3,
 } from 'lucide-react';
 import { useBankroll } from '@/lib/store';
 import { fmtMoney } from '@/lib/format';
@@ -29,6 +30,7 @@ const LINKS = [
   { href: '/value', label: 'Value Board', icon: Flame },
   { href: '/tracker', label: 'Bet Tracker', icon: ClipboardList },
   { href: '/methodology', label: 'The Model', icon: BrainCircuit },
+  { href: '/validation', label: 'Validation', icon: BarChart3 },
 ];
 
 export default function Nav() {

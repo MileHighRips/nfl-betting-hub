@@ -106,6 +106,7 @@ export default function FuturesBoard({ futures = FUTURES }: { futures?: FuturesB
                   stakeUnits={Number(f.units.toFixed(2))}
                   confidence={f.confidence}
                   source={f.kenPick ? 'ken' : 'model'}
+                  book={f.book}
                 />
               ) : (
                 <span className="chip">Watch</span>

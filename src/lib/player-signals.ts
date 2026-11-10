@@ -9,7 +9,7 @@ import type { NewsItem } from './news';
 
 export interface PlayerSignal {
   player: string;
-  status?: 'out' | 'questionable';
+  status?: 'reported-out' | 'questionable';
   /** Bounded usage/probability multiplier applied to that player (0.8–1.25). */
   roleBoost: number;
   /** Promoted to a lead / goal-line / every-down role → independent TD floor. */
@@ -20,6 +20,8 @@ export interface PlayerSignal {
 
 const OUT =
   /\b(ruled out|will not play|won'?t play|inactive|is out\b|out for the (game|season|year)|declared out|placed on ir|injured reserve|miss(es|ing)? (the game|sunday|monday|thursday))\b/i;
+const NOT_OUT =
+  /\b(not|never|no longer|unlikely to be|isn't|wasn't)\b.{0,32}\b(ruled out|out|inactive|miss(es|ing)? (the game|sunday|monday|thursday))\b/i;
 const DOUBT =
   /\b(questionable|game[- ]time decision|limited (in )?practice|did not practice|\bdnp\b|banged up|dinged|nursing|a game[- ]time)\b/i;
 const LEAD =
@@ -34,12 +36,19 @@ const DOWN =
 export function buildPlayerSignals(
   news: NewsItem[],
   players: string[],
+  asOf = new Date(),
 ): Record<string, PlayerSignal> {
+  const now = asOf.getTime();
+  const freshNews = news.filter((item) => {
+    if (!item.published) return false;
+    const published = Date.parse(item.published);
+    return Number.isFinite(published) && published <= now && now - published <= 72 * 60 * 60 * 1000;
+  });
   const result: Record<string, PlayerSignal> = {};
   for (const player of [...new Set(players)]) {
     const key = player.toLowerCase();
     if (result[key] || key.length < 4) continue;
-    const hits = news.filter((n) => n.headline.toLowerCase().includes(key));
+    const hits = freshNews.filter((n) => n.headline.toLowerCase().includes(key));
     if (!hits.length) continue;
     const text = hits.map((h) => h.headline).join(' \u2022 ');
     const src = hits.find((h) => h.source)?.source;
@@ -49,15 +58,16 @@ export function buildPlayerSignals(
     let lead = false;
     const reasons: string[] = [];
 
-    if (OUT.test(text)) {
-      status = 'out';
-      reasons.push('ruled out');
+    const outReport = hits.some((hit) => OUT.test(hit.headline) && !NOT_OUT.test(hit.headline));
+    if (outReport) {
+      status = 'reported-out';
+      reasons.push('recent news reports out; verify official status');
     } else if (DOUBT.test(text)) {
       status = 'questionable';
       roleBoost *= 0.9;
       reasons.push('questionable');
     }
-    if (LEAD.test(text)) {
+    if (!status && LEAD.test(text)) {
       lead = true;
       roleBoost *= 1.2;
       reasons.push('lead/goal-line role');

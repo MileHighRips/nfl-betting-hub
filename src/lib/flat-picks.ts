@@ -7,6 +7,7 @@ import { getFormRatings } from './form';
 import { analyzeGamesWithLocks } from './pick-locks';
 import { getResultsByGameId, gradeAnalysis, type GameGrades } from './pick-grade';
 import { captureClosingLines, getClosingLines, clvForPick, type CloseLines } from './clv';
+import { opposingPriceForPick } from './market-quote';
 import type { ModelPick } from './types';
 import type { FlatPick, PickGroup } from '@/components/AllPicks';
 
@@ -50,6 +51,8 @@ export function buildFlatPicks(
       selection: pick.selection,
       confidence: pick.confidence,
       edge: pick.edge,
+      marketProb: pick.marketProb,
+      opposingPrice: opposingPriceForPick(a.game, pick),
       price: pick.price,
       book: pick.book,
       units: Number(pick.units.toFixed(2)),
@@ -79,11 +82,22 @@ export function buildFlatPicks(
         pickType: a.prop.type,
         side: a.propDetail.side.toLowerCase(),
         line: a.prop.line,
+        alternateLine: a.propDetail.alt,
         player: a.propDetail.player,
         propMarket: a.propDetail.market,
         selection: a.prop.selection,
         confidence: a.prop.confidence,
         edge: a.prop.edge,
+        marketProb: a.prop.marketProb,
+        opposingPrice: opposingPriceForPick(a.game, {
+          pickType: 'Prop',
+          side: a.propDetail.side.toLowerCase(),
+          book: a.prop.book,
+          price: a.prop.price,
+          line: a.prop.line,
+          player: a.propDetail.player,
+          propMarket: a.propDetail.market,
+        }),
         price: a.prop.price,
         book: a.prop.book,
         units: Number(a.prop.units.toFixed(2)),
@@ -152,7 +166,7 @@ export function buildFlatPicks(
       confidence: f.confidence,
       edge: f.edge,
       price: f.price,
-      book: f.book === 'Consensus' || f.book === 'Kalshi' ? 'DraftKings' : f.book,
+      book: f.book,
       units: Number((f.units || 0.5).toFixed(2)),
       trueUnits: sharpUnits(blend(f.modelProb, f.marketProb), f.price),
       description: `${f.selection} — ${f.market}`,
@@ -231,4 +245,3 @@ export async function getLifetimePicks(currentWeek: number): Promise<WeekPicks> 
   }
   return { picks, provider: results.at(-1)?.provider ?? 'Model', week: currentWeek };
 }
-

@@ -4,6 +4,7 @@ import { analyzeGamesWithLocks } from '@/lib/pick-locks';
 import { FUTURES } from '@/data/futures';
 import { getFormRatings } from '@/lib/form';
 import { getActiveWeek } from '@/lib/active-week';
+import { opposingPriceForPick } from '@/lib/market-quote';
 import { Chip, ConfidenceBar, OddsBadge, SectionTitle } from '@/components/atoms';
 import PlaceBetButton from '@/components/PlaceBetButton';
 import type { ModelPick } from '@/lib/types';
@@ -12,15 +13,16 @@ export const dynamic = 'force-dynamic';
 
 export default async function ValuePage() {
   const CURRENT_WEEK = await getActiveWeek();
-  const [{ games }, ratings] = await Promise.all([
+  const [{ games, source }, ratings] = await Promise.all([
     getGames(CURRENT_WEEK),
     getFormRatings(CURRENT_WEEK),
   ]);
   const analyses = await analyzeGamesWithLocks(games, ratings);
+  const pickAnalyses = source === 'live' ? analyses : analyses.filter((analysis) => analysis.locked);
 
   // Collect every game pick with a positive edge.
   const gamePicks: ModelPick[] = [];
-  for (const a of analyses) {
+  for (const a of pickAnalyses) {
     for (const p of [a.spread, a.total, a.moneyline, a.prop, a.upset].filter(
       Boolean,
     ) as ModelPick[]) {
@@ -44,6 +46,13 @@ export default async function ValuePage() {
         subtitle="Prices that look out of whack — where the model most disagrees with DraftKings & FanDuel"
         icon={<Flame size={18} />}
       />
+
+      {source !== 'live' && (
+        <div className="card border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-200">
+          Live odds are unavailable. New game-market value picks are suppressed; frozen locked
+          snapshots are unchanged.
+        </div>
+      )}
 
       {/* Sharp alerts */}
       <section>
@@ -110,6 +119,7 @@ export default async function ValuePage() {
                   stakeUnits={Number((f.units || 0.5).toFixed(2))}
                   confidence={f.confidence}
                   source={f.kenPick ? 'ken' : 'model'}
+                  book={f.book}
                   compact
                 />
               </div>
@@ -149,6 +159,13 @@ export default async function ValuePage() {
                   price={p.price}
                   stakeUnits={Number(p.units.toFixed(2))}
                   confidence={p.confidence}
+                  marketProb={p.marketProb}
+                  opposingPrice={opposingPriceForPick(
+                    analyses.find((a) => a.game.id === p.gameId)?.game,
+                    p,
+                  )}
+                  book={p.book}
+                  kickoff={analyses.find((a) => a.game.id === p.gameId)?.game.kickoff}
                   source="model"
                   gameId={p.gameId}
                   pickType={p.type}

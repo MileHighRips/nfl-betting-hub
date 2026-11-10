@@ -8,7 +8,18 @@ import type { TeamAbbr } from '@/lib/types';
  * line replaces the baseline. Update starters/roles through the season.
  */
 
-export type PropMarket = 'Pass Yards' | 'Rush Yards' | 'Receiving Yards' | 'Receptions' | 'Sacks';
+export type PropMarket =
+  | 'Pass Yards'
+  | 'Rush Yards'
+  | 'Receiving Yards'
+  | 'Receptions'
+  | 'Pass TDs'
+  | 'Pass Attempts'
+  | 'Completions'
+  | 'Rush Attempts'
+  | 'Interceptions'
+  | 'Rush + Rec Yards'
+  | 'Sacks';
 
 export interface PropCandidate {
   player: string;

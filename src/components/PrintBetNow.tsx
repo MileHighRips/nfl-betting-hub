@@ -1,6 +1,6 @@
 import { fmtKick } from '@/lib/format';
 import { formatOdds } from '@/lib/odds';
-import UnitAmount from './UnitAmount';
+import { reviewMatchesSnapshot } from '@/lib/handicap-review-schema';
 import type { BetNowRow } from './BetNowBoard';
 
 /**
@@ -26,7 +26,12 @@ export default function PrintBetNow({
   >();
   for (const r of rows) {
     if (!gameMap.has(r.matchup)) {
-      gameMap.set(r.matchup, { matchup: r.matchup, day: r.day ?? '', kickoff: r.kickoff, rows: [] });
+      gameMap.set(r.matchup, {
+        matchup: r.matchup,
+        day: r.day ?? '',
+        kickoff: r.kickoff,
+        rows: [],
+      });
     }
     gameMap.get(r.matchup)!.rows.push(r);
   }
@@ -34,13 +39,34 @@ export default function PrintBetNow({
     .map((g) => ({ ...g, rows: [...g.rows].sort((a, b) => b.edge - a.edge) }))
     .sort((a, b) => new Date(a.kickoff).getTime() - new Date(b.kickoff).getTime());
 
-  const totalUnits = rows.reduce((s, r) => s + r.stakeUnits, 0);
+  const totalDollars = rows.reduce((s, r) => s + (r.betDollars ?? 0), 0);
+  const totalNetEv = rows.reduce((s, r) => s + (r.netEv ?? 0), 0);
   const onPickOf = (r: BetNowRow) => placed[r.key] ?? 0;
-  const restakeOf = (r: BetNowRow) => Math.round(Math.max(0, r.stakeUnits - onPickOf(r)) * 10) / 10;
   const placedCount = rows.filter((r) => onPickOf(r) > 0).length;
-  const toPlaceUnits = rows.reduce((s, r) => s + restakeOf(r), 0);
   const edgeCell = (edge: number) => (edge > 0 ? `+${(edge * 100).toFixed(1)}%` : '—');
   const selOf = (r: BetNowRow) => r.description.replace(` (${r.matchup})`, '');
+  const reviewStatus = (r: BetNowRow) => {
+    if (r.locked) return 'Frozen';
+    const current = reviewMatchesSnapshot(r.review, {
+      key: r.key,
+      gameId: r.gameId,
+      selection: r.description,
+      pickType: r.pickType,
+      book: r.book,
+      line: r.line,
+      price: r.price,
+      modelProb: r.modelProb,
+      marketProb: r.marketProb,
+      confidence: r.confidence,
+      edge: r.edge,
+      evPercent: r.evPercent,
+      valuePercent: r.valuePercent,
+      betDollars: r.betDollars,
+      netEv: r.netEv,
+    });
+    if (!current) return 'Review required';
+    return r.review?.decision === 'approve' ? 'Approved' : 'Passed';
+  };
 
   return (
     <div className="print-doc">
@@ -50,18 +76,21 @@ export default function PrintBetNow({
           <h1>
             Bet Now · Week {week} · {season}
           </h1>
-          <p>Only actionable value bets (≥2% edge) with conviction stakes — grab the numbers before they move.</p>
+          <p>
+            Bet Now candidates with positive model-estimated value at listed odds. No separate
+            transaction fee is assumed; historical returns do not establish a future edge.
+          </p>
         </div>
         <div className="print-meta">
           NFL Betting Hub · {season}
           <br />
-          Unit size: <UnitAmount units={1} className="mono" />
+          $5 maximum suggested stake per pick
         </div>
       </header>
 
       <section className="print-summary">
         <div>
-          <span>Value Bets</span>
+          <span>Best Bets</span>
           <strong>{rows.length}</strong>
         </div>
         <div>
@@ -69,12 +98,12 @@ export default function PrintBetNow({
           <strong>{placedCount}</strong>
         </div>
         <div>
-          <span>To Place</span>
-          <strong>{toPlaceUnits.toFixed(1)}u</strong>
+          <span>To Risk</span>
+          <strong>${totalDollars.toFixed(0)}</strong>
         </div>
         <div>
-          <span>Total Target</span>
-          <strong>{totalUnits.toFixed(1)}u</strong>
+          <span>Model EV (no fee assumed)</span>
+          <strong>+${totalNetEv.toFixed(0)}</strong>
         </div>
       </section>
 
@@ -95,35 +124,30 @@ export default function PrintBetNow({
                 <th className="c-num">Conf</th>
                 <th className="c-num">Value</th>
                 <th className="c-odds">Odds</th>
-                <th className="c-num">Target</th>
+                <th className="c-num">Bet</th>
+                <th className="c-num">Net EV</th>
+                <th className="c-num">Review</th>
                 <th className="c-num">Have</th>
-                <th className="c-num">Place now</th>
               </tr>
             </thead>
             <tbody>
               {g.rows.map((r, i) => {
                 const onPick = onPickOf(r);
-                const restake = restakeOf(r);
                 return (
                   <tr key={`${r.key}-${i}`}>
                     <td className="c-type">{r.pickType}</td>
                     <td className="c-sel">{selOf(r)}</td>
                     <td className="c-num">{r.confidence ? `${r.confidence}%` : '—'}</td>
-                    <td className="c-num c-edge">{r.disconnect ? r.disconnect.label : edgeCell(r.edge)}</td>
-                    <td className="c-odds">{formatOdds(r.price)}</td>
-                    <td className="c-num">{r.stakeUnits > 0 ? `${r.stakeUnits.toFixed(2)}u` : '—'}</td>
-                    <td className="c-num">{onPick > 0 ? `${onPick.toFixed(2)}u` : '—'}</td>
-                    <td className="c-num">
-                      {restake >= 0.5 ? (
-                        <>
-                          {restake.toFixed(2)}u · <UnitAmount units={restake} className="mono" />
-                        </>
-                      ) : onPick > 0 ? (
-                        '✓ placed'
-                      ) : (
-                        '—'
-                      )}
+                    <td className="c-num c-edge">
+                      {r.disconnect ? r.disconnect.label : edgeCell(r.edge)}
                     </td>
+                    <td className="c-odds">{formatOdds(r.price)}</td>
+                    <td className="c-num">{r.betDollars ? `$${r.betDollars.toFixed(0)}` : '—'}</td>
+                    <td className="c-num c-edge">
+                      {r.netEv != null ? `+$${r.netEv.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="c-num">{reviewStatus(r)}</td>
+                    <td className="c-num">{onPick > 0 ? `${onPick.toFixed(2)}u` : '—'}</td>
                   </tr>
                 );
               })}

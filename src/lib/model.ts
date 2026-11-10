@@ -8,12 +8,13 @@ import {
   noVigProb,
   sharpUnits,
 } from './odds';
-import { bestProp, bestProps } from './props';
+import { bestProp, bestProps, bestPropAlts } from './props';
 import { homeCoverProb, overProb, simulateGame, type GameSim } from './simulation';
 import { passesConviction } from './calibration';
 import { calibrateTdProb, getTdCalibration, getPropResidualSds } from './props-model';
 import { softTotalEdge } from './segments';
 import { gradeDisconnect, MARGIN_SD, TOTAL_SD, type Disconnect } from './disconnect';
+import { buildAltPicks, type AltPick } from './alt-lines';
 import { computeGameScript, type GameScript } from './game-script';
 import type { Ratings } from './form';
 import { WEEK1_HISTORICAL_PICKS, type HistoricalPickOverride } from '@/data/historicalPicks';
@@ -22,39 +23,85 @@ import { WEEK1_HISTORICAL_PICKS, type HistoricalPickOverride } from '@/data/hist
  * The model layer. Every game is run through the Monte-Carlo simulation engine
  * (see simulation.ts); spread, moneyline and total picks are read off the same
  * simulated score distribution, then blended with the vig-free market price for
- * staking. Stakes use fractional Kelly, hard-capped at 1 unit.
+ * staking. Provisional stakes use one-eighth Kelly, capped at 0.5 units until
+ * the live-pick archive demonstrates that model probabilities are calibrated.
  */
 
-export const MODEL_WEIGHT = 0.55; // weight on the model vs. the market when blending
+export const MODEL_WEIGHT = 0.3; // default provisional model weight until live validation establishes calibration
 
-// Adaptive blend by market: lean on the sharp market for sides (our weaker
-// suit), and on our proven simulation for totals. Measured, not guessed.
-const WEIGHT_SIDE = 0.4; // spread & moneyline — lean harder on the sharp market (we're weak here)
-const WEIGHT_TOTAL = 0.65; // totals — the model's demonstrated edge (63% through wk3)
-const WEIGHT_PROP = 0.5;
+// Reduce reliance on markets with recent losses; all remain market-anchored.
+const WEIGHT_SPREAD = 0.4;
+const WEIGHT_MONEYLINE = 0.25;
+const WEIGHT_TOTAL = 0.3;
+const WEIGHT_PROP = 0.25;
 
 // Modest conviction bump for the validated situational-total spots (see segments.ts).
 // Kept small because the segment edge is promising but not yet proven live.
 const SOFT_TOTAL_BUMP = 1.2;
 
-// Conviction stake (uncapped quarter-Kelly on the 0.55 blend) shown on the slate
-// and True Units page — kept at MODEL_WEIGHT so historical numbers don't shift.
-function trueUnitsFor(modelProb: number, marketProb: number, price: number): number {
-  return sharpUnits(MODEL_WEIGHT * modelProb + (1 - MODEL_WEIGHT) * marketProb, price);
+// Live picks are not yet proven profitable out of sample; limit model exposure.
+const KELLY_FRACTION = 0.125;
+const MAX_TRUE_UNITS = 0.5;
+const TOTAL_MAX_UNITS = 0.5;
+
+// Book minimum of $2.50/bet = 0.25u at the $10 default unit. Surfaced +EV bets
+// are rounded up to this so they're placeable; sub-floor non-+EV bets are dropped.
+const MIN_STAKE_UNITS = 0.25;
+
+// Newer prop markets (added round 29) aren't yet tracker-validated — size them
+// provisionally smaller than the core yardage/reception markets.
+const NEW_PROP_MARKETS = new Set<string>([
+  'Pass TDs',
+  'Pass Attempts',
+  'Completions',
+  'Rush Attempts',
+  'Interceptions',
+  'Rush + Rec Yards',
+]);
+
+// Provisional conviction stake on the same model/market blend used elsewhere.
+function trueUnitsFor(
+  modelProb: number,
+  marketProb: number,
+  price: number,
+  weight = MODEL_WEIGHT,
+): number {
+  return sharpUnits(
+    weight * modelProb + (1 - weight) * marketProb,
+    price,
+    KELLY_FRACTION,
+    MAX_TRUE_UNITS,
+  );
+}
+
+export function blendPickProbability(
+  market: 'Spread' | 'Moneyline' | 'Total' | 'Prop' | 'Alt Spread' | 'Alt Total',
+  modelProb: number,
+  marketProb: number,
+): number {
+  const weight =
+    market === 'Prop'
+      ? WEIGHT_PROP
+      : market === 'Total' || market === 'Alt Total'
+        ? WEIGHT_TOTAL
+        : market === 'Spread' || market === 'Alt Spread'
+          ? WEIGHT_SPREAD
+          : WEIGHT_MONEYLINE;
+  return weight * modelProb + (1 - weight) * marketProb;
 }
 
 function consensus(books: BookLine[]) {
-  const n = books.length || 1;
-  return {
-    spread: books.reduce((s, b) => s + b.spread, 0) / n,
-    total: books.reduce((s, b) => s + b.total, 0) / n,
-  };
+  // Use the primary book as the anchor for determining the model's preferred
+  // direction. Each candidate's probability and value are evaluated at its own
+  // exact book line before a placement quote is selected.
+  const b = books[0];
+  return { spread: b.spread, total: b.total };
 }
 
 function bestPrice<T extends BookLine>(books: T[], pick: (b: T) => number) {
   let best = books[0];
   for (const b of books) if (pick(b) > pick(best)) best = b;
-  return { book: best.book, price: pick(best) };
+  return { book: best.book, price: pick(best), quote: best };
 }
 
 export interface GameAnalysis {
@@ -78,6 +125,8 @@ export interface GameAnalysis {
   anytimeTdLongshot?: AnytimeTdPick;
   /** Every +EV anytime-TD scorer (best first). Locked games hold only frozen ones. */
   anytimeTds: AnytimeTdPick[];
+  /** Alternate-line value (key-number spreads / strong-disconnect totals). */
+  altPicks?: AltPick[];
   locked?: boolean;
   topPick: ModelPick;
   /** Projected game script (high/low scoring, blowout) from the sim. */
@@ -98,6 +147,8 @@ export interface AnytimeTdPick {
   disconnect?: Disconnect;
   /** Structured beat-writer/role signal reason (e.g. "lead/goal-line role"). */
   note?: string;
+  /** Bearish status (questionable/reduced/out) — a warning, never a reason to bet. */
+  caution?: string;
   /** Aligned with the projected game script (blowout usage tilt). */
   narrative?: boolean;
   scriptTag?: string;
@@ -146,10 +197,12 @@ export function analyzeGame(
     ? buildHistoricalPick(game, historicalUpset)
     : detectUpset(game, sim, con.spread);
 
-  // From Week 2 on, every value game pick is a flat 1-unit play (props/spreads/
-  // totals/moneylines/upsets). Anytime-TD keeps its own optimal sizing.
+  // Keep the displayed recommendation stake aligned with the provisional
+  // conviction stake instead of overriding it with a flat, larger unit.
   const flat = (p: ModelPick): ModelPick =>
-    game.week >= 2 && p.units > 0 ? { ...p, units: 1 } : p;
+    game.week >= 2 && p.units > 0
+      ? { ...p, units: Math.min(MAX_TRUE_UNITS, p.trueUnits ?? p.units) }
+      : p;
   const spreadPick = flat(spread);
   const totalPick = flat(total);
   const mlPick = flat(moneylinePick);
@@ -172,7 +225,29 @@ export function analyzeGame(
           totalMean: sim.totalMean,
         },
         { minEdge: 0.05, limit: 2 },
-      ).map((e) => ({ pick: flat(buildPropPick(game, e.prop)), detail: e.prop }));
+      ).map((e) => ({ pick: flat(buildPropPick(game, e.prop, { prob: e.prob, edge: e.edge })), detail: e.prop }));
+
+  // Alternate ("N+") prop rungs with real book value, priced vs our projection.
+  // Locked/historical games keep only their frozen prop — no new alts injected.
+  if (!historicalProp) {
+    const chosen = new Set(props.map((p) => p.detail.player.toLowerCase()));
+    const altProps = bestPropAlts(
+      game,
+      game.livePropAlts,
+      game.livePropLines,
+      {
+        projHome: sim.projHome,
+        projAway: sim.projAway,
+        marginMean: sim.marginMean,
+        totalMean: sim.totalMean,
+      },
+      { minEdge: 0.05, limit: 2 },
+    )
+      // Don't double-list a player already on the main-line board.
+      .filter((e) => !chosen.has(e.prop.player.toLowerCase()))
+      .map((e) => ({ pick: flat(buildPropPick(game, e.prop, { prob: e.prob, edge: e.edge })), detail: e.prop }));
+    props.push(...altProps);
+  }
 
   const candidates = [spreadPick, mlPick, totalPick, propPickFlat];
   const topPick = candidates.reduce((a, b) => (b.confidence > a.confidence ? b : a));
@@ -264,6 +339,37 @@ export function analyzeGame(
   const extras = longshotTds.slice(1).filter((p) => p.ev >= 0.02 || !!p.note).slice(0, 2);
   const anytimeTds = top ? [top, ...extras] : [];
 
+  // Alternate-line value: price the book's real alt ladder against our sim.
+  // Narrow by design (key-number spreads, >=1σ totals) and small-capped.
+  const altPicks = buildAltPicks(game, sim, spreadPick, totalPick);
+
+  // Correlation cap: the total AND props all key off the same game script, so one
+  // game can't sink a stack of correlated bets (the 16u PIT@CLE unders). Totals are
+  // our weakest live market, so they're scaled in the budget too — not protected.
+  const GAME_CORR_CAP = 4;
+  const corr = [totalPick, ...props.map((p) => p.pick)];
+  const corrTrue = corr.reduce((s, p) => s + (p.trueUnits ?? 0), 0);
+  if (corrTrue > GAME_CORR_CAP) {
+    const f = GAME_CORR_CAP / corrTrue;
+    for (const p of corr) if (p.trueUnits) p.trueUnits = Number((p.trueUnits * f).toFixed(2));
+  }
+
+  // Book minimum: $2.50/bet = 0.25u at the $10 default unit. Round genuine +EV
+  // bets UP to the floor so every surfaced play is actually placeable; drop
+  // sub-floor bets that aren't +EV (narrative ATD darts) rather than force a
+  // $2.50 −EV position. Applied last so it wins over the correlation scaling.
+  const floorStake = (p: { trueUnits?: number }, keep: boolean) => {
+    const t = p.trueUnits ?? 0;
+    if (t > 0 && t < MIN_STAKE_UNITS) p.trueUnits = keep ? MIN_STAKE_UNITS : 0;
+  };
+  for (const p of [spreadPick, mlPick, totalPick, propPickFlat]) floorStake(p, p.edge > 0);
+  if (upsetPick) floorStake(upsetPick, upsetPick.edge > 0);
+  for (const { pick } of props) floorStake(pick, pick.edge > 0);
+  for (const alt of altPicks) floorStake(alt, alt.edge > 0);
+  for (const td of anytimeTds) floorStake(td, td.ev > 0);
+  if (anytimeTd) floorStake(anytimeTd, anytimeTd.ev > 0);
+  if (anytimeTdLongshot) floorStake(anytimeTdLongshot, anytimeTdLongshot.ev > 0);
+
   return {
     game,
     sim,
@@ -283,6 +389,7 @@ export function analyzeGame(
     anytimeTd,
     anytimeTdLongshot,
     anytimeTds,
+    altPicks,
     topPick,
     script,
   };
@@ -359,7 +466,7 @@ function buildSpreadPick(game: Game, sim: GameSim, conSpread: number): ModelPick
   const chosen = best!;
   const line = takeHome ? chosen.book.spread : -chosen.book.spread;
   const edge = chosen.prob - chosen.marketProb;
-  // Backtest: side edges under 55% realized ~25% — do not stake them.
+  // The chosen side must be favored; the live Bet Now filter tests value vs market.
   const conviction = passesConviction('Spread', chosen.prob);
   return {
     gameId: game.id,
@@ -373,8 +480,12 @@ function buildSpreadPick(game: Game, sim: GameSim, conSpread: number): ModelPick
     modelProb: chosen.prob,
     edge,
     confidence: confidenceScore(chosen.prob, edge),
-    units: conviction ? blendUnits(chosen.prob, chosen.marketProb, chosen.price, WEIGHT_SIDE) : 0,
-    trueUnits: conviction ? trueUnitsFor(chosen.prob, chosen.marketProb, chosen.price) : 0,
+    units: conviction
+      ? blendUnits(chosen.prob, chosen.marketProb, chosen.price, WEIGHT_SPREAD)
+      : 0,
+    trueUnits: conviction
+      ? trueUnitsFor(chosen.prob, chosen.marketProb, chosen.price, WEIGHT_SPREAD)
+      : 0,
     factors: sim.factors,
   };
 }
@@ -388,11 +499,11 @@ function buildMoneylinePick(game: Game, sim: GameSim): ModelPick {
     ? bestPrice(game.books, (b) => b.moneylineHome)
     : bestPrice(game.books, (b) => b.moneylineAway);
   const marketProb = noVigProb(
-    takeHome ? game.books[0].moneylineHome : game.books[0].moneylineAway,
-    takeHome ? game.books[0].moneylineAway : game.books[0].moneylineHome,
+    takeHome ? priced.quote.moneylineHome : priced.quote.moneylineAway,
+    takeHome ? priced.quote.moneylineAway : priced.quote.moneylineHome,
   );
   const edge = prob - marketProb;
-  // Backtest: moneyline edges under 55% realized ~25% — do not stake them.
+  // The chosen side must be favored; the live Bet Now filter tests value vs market.
   const conviction = passesConviction('Moneyline', prob);
   return {
     gameId: game.id,
@@ -406,50 +517,95 @@ function buildMoneylinePick(game: Game, sim: GameSim): ModelPick {
     modelProb: prob,
     edge,
     confidence: confidenceScore(prob, edge),
-    units: conviction ? blendUnits(prob, marketProb, priced.price, WEIGHT_SIDE) : 0,
-    trueUnits: conviction ? trueUnitsFor(prob, marketProb, priced.price) : 0,
+    units: conviction
+      ? blendUnits(prob, marketProb, priced.price, WEIGHT_MONEYLINE)
+      : 0,
+    trueUnits: conviction
+      ? trueUnitsFor(prob, marketProb, priced.price, WEIGHT_MONEYLINE)
+      : 0,
     factors: [],
   };
 }
 
 function buildTotalPick(game: Game, sim: GameSim, conTotal: number, conSpread = 0): ModelPick {
-  const over = overProb(sim, conTotal);
-  const takeOver = over >= 0.5;
-  const prob = takeOver ? over : 1 - over;
-  const priced = takeOver
-    ? bestPrice(game.books, (b) => b.overPrice)
-    : bestPrice(game.books, (b) => b.underPrice);
-  const marketProb = noVigProb(
-    takeOver ? game.books[0].overPrice : game.books[0].underPrice,
-    takeOver ? game.books[0].underPrice : game.books[0].overPrice,
-  );
-  const edge = prob - marketProb;
+  const takeOver = overProb(sim, conTotal) >= 0.5;
+  let best:
+    | {
+        book: Game['books'][number];
+        price: number;
+        line: number;
+        prob: number;
+        marketProb: number;
+        ev: number;
+      }
+    | undefined;
+  for (const book of game.books) {
+    const over = overProb(sim, book.total);
+    const prob = takeOver ? over : 1 - over;
+    const price = takeOver ? book.overPrice : book.underPrice;
+    const marketProb = noVigProb(
+      takeOver ? book.overPrice : book.underPrice,
+      takeOver ? book.underPrice : book.overPrice,
+    );
+    const ev = prob * americanToProfit(price) - (1 - prob);
+    if (!best || ev > best.ev)
+      best = { book, price, line: book.total, prob, marketProb, ev };
+  }
+  const chosen = best!;
+  const edge = chosen.prob - chosen.marketProb;
   // Validated situational totals edge (15-season segment hunt): modest, tagged bump.
   const soft = softTotalEdge(game, conSpread);
-  const baseTrue = trueUnitsFor(prob, marketProb, priced.price);
+  const baseTrue = trueUnitsFor(chosen.prob, chosen.marketProb, chosen.price, WEIGHT_TOTAL);
+  // Totals are the weakest live market (−27.6% W3–W4, ~0 CLV) — cap tighter than sides.
+  const totalTrue = soft.active
+    ? Math.min(TOTAL_MAX_UNITS, Number((baseTrue * SOFT_TOTAL_BUMP).toFixed(2)))
+    : Math.min(TOTAL_MAX_UNITS, baseTrue);
   return {
     gameId: game.id,
     type: 'Total',
-    selection: `${takeOver ? 'Over' : 'Under'} ${conTotal.toFixed(1)}`,
+    selection: `${takeOver ? 'Over' : 'Under'} ${chosen.line.toFixed(1)}`,
     side: takeOver ? 'over' : 'under',
-    book: priced.book,
-    price: priced.price,
-    line: conTotal,
-    marketProb,
-    modelProb: prob,
+    book: chosen.book.book,
+    price: chosen.price,
+    line: chosen.line,
+    marketProb: chosen.marketProb,
+    modelProb: chosen.prob,
     edge,
-    confidence: confidenceScore(prob, edge),
-    units: blendUnits(prob, marketProb, priced.price, WEIGHT_TOTAL),
-    trueUnits: soft.active ? Math.min(5, Number((baseTrue * SOFT_TOTAL_BUMP).toFixed(2))) : baseTrue,
+    confidence: confidenceScore(chosen.prob, edge),
+    units: blendUnits(chosen.prob, chosen.marketProb, chosen.price, WEIGHT_TOTAL),
+    trueUnits: totalTrue,
     situational: soft.active ? `Situational total · ${soft.reason}` : undefined,
     factors: [],
   };
 }
 
-function buildPropPick(game: Game, p: PlayerProp): ModelPick {
-  const prob = Math.max(0.5, Math.min(0.9, p.confidence / 100));
+function buildPropPick(game: Game, p: PlayerProp, ev?: { prob: number; edge: number }): ModelPick {
   const marketProb = americanToProb(p.price);
-  const edge = prob - marketProb;
+  // Use the real model probability when the caller has it. The confidence proxy
+  // (clamped 50–90%) is one-sided and WRONG for sub-50% alt rungs — it inflates
+  // both the shown value and the Kelly stake on longshot "N+" lottery tickets.
+  const prob = ev ? ev.prob : Math.max(0.5, Math.min(0.9, p.confidence / 100));
+  const edge = ev ? ev.edge : prob - marketProb;
+  // Low-variance markets (esp. Receptions, SD~2.2) inflate the edge, which inflates
+  // the Kelly stake on what are really thin reads. Dampen + hard-cap prop stakes so
+  // one noisy prop can't balloon into a 3u bet.
+  const damp = p.market === 'Receptions' ? 0.5 : 0.8;
+  // Stake caps by reliability: alt "N+" rungs are high-variance lottery tickets
+  // (tightest); the newer markets are provisional until the tracker validates them;
+  // core yardage/receptions keep the standard cap.
+  const [unitCap, trueCap] = p.alt
+    ? [0.25, MAX_TRUE_UNITS]
+    : NEW_PROP_MARKETS.has(p.market)
+      ? [MAX_TRUE_UNITS, MAX_TRUE_UNITS]
+      : [MAX_TRUE_UNITS, MAX_TRUE_UNITS];
+  const units = Math.min(
+  unitCap,
+  blendUnits(prob, marketProb, p.price, WEIGHT_PROP) * damp,
+  );
+  const trueUnits = Math.min(
+    trueCap,
+    trueUnitsFor(prob, marketProb, p.price, WEIGHT_PROP) * damp,
+  );
   return {
     gameId: game.id,
     type: 'Prop',
@@ -462,9 +618,8 @@ function buildPropPick(game: Game, p: PlayerProp): ModelPick {
     modelProb: prob,
     edge,
     confidence: p.confidence,
-    // Shrink toward the market like the other markets — no over-staking props.
-    units: blendUnits(prob, marketProb, p.price, WEIGHT_PROP),
-    trueUnits: trueUnitsFor(prob, marketProb, p.price),
+    units,
+    trueUnits,
     player: p.player,
     propMarket: p.market,
     factors: [{ label: 'Projection', detail: p.rationale, impact: p.projection - p.line }],
@@ -572,15 +727,19 @@ function evaluateAnytimeTds(
     }
     // Narrative lane: blowout usage tilt OR a high-scoring team tailwind.
     if (!scriptTag && ourImplied >= 27) scriptTag = `high-scoring (${c.team})`;
-    const note = sig?.reason; // news lane only — kept separate from narrative
+    // News lane = BULLISH role news only (promotion / next-man-up). A bearish status
+    // (questionable / reduced / out) already dampened prob above, so it reads as a
+    // caution — never as a reason to bet (it must not boost ranking, tier or filters).
+    const bullish = !!sig && (sig.lead || sig.roleBoost > 1);
+    const note = bullish ? sig!.reason : undefined;
+    const caution = sig && !bullish ? sig.reason : undefined;
     const narrative = !!scriptTag;
 
     const profit = americanToProfit(c.price);
     const ev = prob * profit - (1 - prob);
     const edge = prob - impliedProb;
-    // Longshot sizing: quarter-Kelly, hard-capped small so a single news-driven
-    // read can never over-stake a lottery ticket. Profit comes from +EV + volume.
-    const units = Math.min(0.4, kellyUnits(prob, c.price));
+    // Keep speculative anytime-TD exposure below the main-market cap.
+    const units = Math.min(0.25, kellyUnits(prob, c.price, KELLY_FRACTION));
     picks.push({
       player: c.player,
       team: c.team,
@@ -591,8 +750,9 @@ function evaluateAnytimeTds(
       edge,
       ev,
       units,
-      trueUnits: sharpUnits(prob, c.price, 0.25, 1), // cap 1u on longshots
+      trueUnits: sharpUnits(prob, c.price, KELLY_FRACTION, 0.25),
       note,
+      caution,
       narrative,
       scriptTag,
     });
@@ -608,8 +768,8 @@ function detectUpset(game: Game, sim: GameSim, conSpread: number): ModelPick | u
     : bestPrice(game.books, (b) => b.moneylineAway);
   if (priced.price <= 0) return undefined;
   const marketProb = noVigProb(
-    dogIsHome ? game.books[0].moneylineHome : game.books[0].moneylineAway,
-    dogIsHome ? game.books[0].moneylineAway : game.books[0].moneylineHome,
+    dogIsHome ? priced.quote.moneylineHome : priced.quote.moneylineAway,
+    dogIsHome ? priced.quote.moneylineAway : priced.quote.moneylineHome,
   );
   const edge = dogWinProb - marketProb;
   if (edge <= 0.045 || dogWinProb <= 0.38) return undefined;

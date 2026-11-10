@@ -31,13 +31,15 @@ export default async function SlatePage({
     analyzeGamesWithLocks(games, ratings),
     getResultsByGameId(week),
   ]);
-  const analyses = analysesRaw.sort(
+  const sortedAnalyses = analysesRaw.sort(
     (a, b) => new Date(a.game.kickoff).getTime() - new Date(b.game.kickoff).getTime(),
   );
+  const analyses =
+    source === 'live' ? sortedAnalyses : sortedAnalyses.filter((analysis) => analysis.locked);
 
   const bestBets = analyses.filter((a) => a.topPick.confidence >= 62 && a.topPick.units > 0).length;
   // Value parlays are a forward feature — week 3 on, never on locked history.
-  const parlays = week >= 3 ? buildParlays(analyses) : [];
+  const parlays = source === 'live' && week >= 3 ? buildParlays(analyses) : [];
 
   return (
     <>
@@ -52,23 +54,30 @@ export default async function SlatePage({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <SectionTitle
             title={`Week ${week} Slate · ${SEASON}`}
-            subtitle={`${games.length} games · ${bestBets} model best-bets · live DraftKings lines`}
+            subtitle={
+              source === 'live'
+                ? `${games.length} games · ${bestBets} model best-bets · live DraftKings lines`
+                : `${analyses.length} frozen locked snapshots · new recommendations suppressed`
+            }
             icon={<CalendarRange size={18} />}
           />
           <div className="flex flex-wrap items-center gap-2">
             <Chip variant={source === 'live' ? 'value' : 'default'}>{provider}</Chip>
             <RefreshPicks />
-            <ExportPdfButton
-              label="Export PDF"
-              title="Export every model pick — including no-value plays — as a PDF"
-            />
+            {(source === 'live' || analyses.length > 0) && (
+              <ExportPdfButton
+                label="Export PDF"
+                title="Export every model pick — including no-value plays — as a PDF"
+              />
+            )}
             <WeekSelector week={week} currentWeek={currentWeek} />
           </div>
         </div>
 
         {error && (
           <div className="card border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-300">
-            Live feed unavailable ({error}) — showing seed lines.
+            Live feed unavailable ({error}) — new recommendations are suppressed; frozen locked
+            snapshots remain unchanged.
           </div>
         )}
 

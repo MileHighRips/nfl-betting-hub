@@ -17,12 +17,53 @@ export interface NewsItem {
   link?: string;
   source?: string;
   breaking?: boolean; // hard status keyword (ruled out / inactive / IR)
+  beatWriter?: string; // named team beat writer this item was sourced from
   teams: TeamAbbr[];
 }
 
 // Hard roster-status language the model's structured injury feed may not have yet.
 const HARD_STATUS =
   /(ruled out|inactive|will not play|won't play|placed on ir|to ir|out for the season|season-ending|suspended|doubtful|carted off)/i;
+
+/**
+ * Trusted team beat writers. Their bylines are the sharpest local signal for
+ * practice participation, snap/usage and game-time decisions. We query Google
+ * News by name so their reports surface alongside the general team wire.
+ */
+const BEAT_WRITERS: Record<TeamAbbr, { name: string; outlet: string }> = {
+  BUF: { name: 'Joe Buscaglia', outlet: 'WGR' },
+  MIA: { name: 'Barry Jackson', outlet: 'Miami Herald' },
+  NE: { name: 'Mike Reiss', outlet: 'ESPN' },
+  NYJ: { name: 'Rich Cimini', outlet: 'ESPN' },
+  BAL: { name: 'Jeff Zrebiec', outlet: 'The Athletic' },
+  CIN: { name: 'Paul Dehner Jr.', outlet: 'The Athletic' },
+  CLE: { name: 'Zac Jackson', outlet: 'The Athletic' },
+  PIT: { name: 'Mark Kaboly', outlet: 'The Athletic' },
+  HOU: { name: 'Aaron Wilson', outlet: 'KPRC' },
+  IND: { name: 'Stephen Holder', outlet: 'ESPN' },
+  JAX: { name: 'Michael DiRocco', outlet: 'ESPN' },
+  TEN: { name: 'Turron Davenport', outlet: 'ESPN' },
+  KC: { name: 'Pete Sweeney', outlet: 'Chiefs Digest' },
+  LAC: { name: 'Daniel Popper', outlet: 'The Athletic' },
+  LV: { name: 'Paul Gutierrez', outlet: 'ESPN' },
+  DEN: { name: 'Jeff Legwold', outlet: 'ESPN' },
+  DAL: { name: 'Todd Archer', outlet: 'ESPN' },
+  NYG: { name: 'Jordan Raanan', outlet: 'ESPN' },
+  PHI: { name: 'Jeff McLane', outlet: 'Philadelphia Inquirer' },
+  WAS: { name: 'John Keim', outlet: 'ESPN' },
+  CHI: { name: 'Adam Jahns', outlet: 'The Athletic' },
+  DET: { name: 'Dave Birkett', outlet: 'Detroit Free Press' },
+  GB: { name: 'Rob Demovsky', outlet: 'ESPN' },
+  MIN: { name: 'Ben Goessling', outlet: 'Star Tribune' },
+  ATL: { name: 'D. Orlando Ledbetter', outlet: 'Atlanta Journal-Constitution' },
+  CAR: { name: 'Joe Person', outlet: 'The Athletic' },
+  NO: { name: 'Jeff Duncan', outlet: 'The Athletic' },
+  TB: { name: 'Greg Auman', outlet: 'Fox Sports' },
+  SF: { name: 'Matt Barrows', outlet: 'The Athletic' },
+  LAR: { name: 'Sarah Barshop', outlet: 'ESPN' },
+  SEA: { name: 'Brady Henderson', outlet: 'ESPN' },
+  ARI: { name: 'Josh Weinfuss', outlet: 'ESPN' },
+};
 
 const NICKNAME: [TeamAbbr, string, string][] = Object.values(TEAMS).map((t) => [
   t.abbr,
@@ -124,6 +165,7 @@ function parseGoogleNews(xml: string, team: TeamAbbr): NewsItem[] {
 async function fetchTeamNews(team: TeamAbbr): Promise<NewsItem[]> {
   const t = TEAMS[team];
   const base = `"${t.city} ${t.name}"`;
+  const writer = BEAT_WRITERS[team];
   // Two targeted beat-writer queries: (1) availability/injury, (2) role/usage/
   // depth-chart — the second is the real alpha for props & TD scorers.
   const queries = [
@@ -136,16 +178,25 @@ async function fetchTeamNews(team: TeamAbbr): Promise<NewsItem[]> {
     `${base} ("injury report" OR "did not participate" OR "limited participant" OR "full participant" OR ` +
       `"head coach" OR "coach said" OR presser OR "press conference" OR podium OR "designated to return" OR ` +
       `activated OR "ruled doubtful" OR "expected to play" OR "expected to miss") when:5d`,
+    // Named beat writer: pull this reporter's recent betting-relevant bylines.
+    `"${writer.name}" (injury OR inactive OR questionable OR doubtful OR "ruled out" OR practice OR ` +
+      `"depth chart" OR "snap count" OR starter OR start OR workload OR carries OR targets OR ` +
+      `"red zone" OR IR OR activated OR elevated OR benched OR suspended) when:7d`,
   ];
   const lists = await Promise.all(
-    queries.map(async (q) => {
+    queries.map(async (q, i) => {
+      // The last query is the named-writer feed; tag its items with the writer.
+      const isWriter = i === queries.length - 1;
       try {
         const res = await fetch(
           `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`,
           { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 300 } },
         );
         if (!res.ok) return [] as NewsItem[];
-        return parseGoogleNews(await res.text(), team).slice(0, 8);
+        const parsed = parseGoogleNews(await res.text(), team).slice(0, 8);
+        return isWriter
+          ? parsed.map((n) => ({ ...n, beatWriter: writer.name, source: n.source ?? writer.outlet }))
+          : parsed;
       } catch {
         return [] as NewsItem[];
       }

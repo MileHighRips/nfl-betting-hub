@@ -5,7 +5,7 @@ import type { TeamAbbr } from './types';
 
 /**
  * Free live-data proxies scraped from ESPN's public API (no key required):
- *   • Injuries  — starter-QB availability + a set of ruled-out players so the
+ *   • Injuries  — starter-QB availability + a set of players listed unavailable so the
  *                 prop model never recommends someone who won't play.
  *   • Rest days — real days of rest per team from the schedule (bye weeks,
  *                 short-week Thursday games).
@@ -18,24 +18,49 @@ const NAME_TO_ABBR: Record<string, TeamAbbr> = Object.fromEntries(
 ) as Record<string, TeamAbbr>;
 NAME_TO_ABBR['Washington Commanders'] = 'WAS';
 
-const UNAVAILABLE = new Set(['Out', 'Injured Reserve', 'Suspension', 'Doubtful']);
+const UNAVAILABLE = new Set([
+  'Out',
+  'Injured Reserve',
+  'IR',
+  'Reserve/Injured',
+  'Suspension',
+  'Suspended',
+  'Doubtful',
+]);
+const TRACKED_INJURY_STATUSES = new Set([
+  ...UNAVAILABLE,
+  'Questionable',
+  'Probable',
+  'PUP',
+  'Non-Football Injury',
+  'Reserve/Non-Football Injury',
+  'Reserve/PUP',
+  'Day-To-Day',
+  'Physically Unable to Perform',
+]);
 
 export interface TeamInjuries {
   qbOut: boolean;
   unavailable: string[]; // display names ruled out
+  reports: {
+    player: string;
+    position?: string;
+    status: string;
+    sourceUpdatedAt?: string;
+  }[];
 }
 
 interface EspnInjuryTeam {
   displayName: string;
   injuries?: {
     status?: string;
+    date?: string;
     athlete?: { displayName?: string; position?: { abbreviation?: string } };
   }[];
 }
 
 // The ESPN injuries payload is ~11MB — far over Next's 2MB fetch-cache limit, so
-// caching the raw response fails. Instead cache the tiny parsed result (a few
-// out players per team) so the big download + parse runs at most once per TTL.
+// cache only the parsed status/position records needed by the live model.
 const fetchInjuries = async (): Promise<Partial<Record<TeamAbbr, TeamInjuries>>> => {
   try {
     const res = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries', {
@@ -48,17 +73,25 @@ const fetchInjuries = async (): Promise<Partial<Record<TeamAbbr, TeamInjuries>>>
       const abbr = NAME_TO_ABBR[team.displayName];
       if (!abbr) continue;
       const unavailable: string[] = [];
+      const reports: TeamInjuries['reports'] = [];
       let qbOut = false;
       for (const inj of team.injuries ?? []) {
-        if (!inj.status || !UNAVAILABLE.has(inj.status)) continue;
+        if (!inj.status || !TRACKED_INJURY_STATUSES.has(inj.status)) continue;
         const name = inj.athlete?.displayName;
         if (!name) continue;
-        unavailable.push(name);
+        const position = inj.athlete?.position?.abbreviation;
+        reports.push({
+          player: name,
+          ...(position ? { position } : {}),
+          status: inj.status,
+          ...(inj.date ? { sourceUpdatedAt: inj.date } : {}),
+        });
+        if (UNAVAILABLE.has(inj.status)) unavailable.push(name);
         // Live, roster-agnostic: any ruled-out QB flags qbOut; odds-source then
         // refines it against the live DK starter (passing-prop player).
-        if (inj.athlete?.position?.abbreviation === 'QB') qbOut = true;
+        if (position === 'QB' && UNAVAILABLE.has(inj.status)) qbOut = true;
       }
-      out[abbr] = { qbOut, unavailable };
+      out[abbr] = { qbOut, unavailable, reports };
     }
     return out;
   } catch {

@@ -7,6 +7,7 @@ import { analyzeGame } from './model';
 import { getGames } from './odds-source';
 import { getFormRatings } from './form';
 import { memo } from './cache';
+import { serializeStoreUpdate, writeJsonAtomically } from './store-io';
 
 const STORE_DIR = path.join(process.cwd(), 'data', 'store');
 const STORE_FILE = path.join(STORE_DIR, 'pick-locks.json');
@@ -69,19 +70,26 @@ function isLockDue(game: Game, now: Date): boolean {
 async function readLocks(): Promise<LockStore> {
   try {
     const raw = JSON.parse(await fs.readFile(STORE_FILE, 'utf-8'));
-    if (raw && typeof raw === 'object' && raw.locks && typeof raw.locks === 'object') {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.hasOwn(raw, 'locks')) {
+      if (!raw.locks || typeof raw.locks !== 'object' || Array.isArray(raw.locks))
+        throw new Error('Invalid pick-lock store: locks must be an object.');
+      if (raw.unlocked != null && !Array.isArray(raw.unlocked))
+        throw new Error('Invalid pick-lock store: unlocked must be an array.');
       return { locks: raw.locks, unlocked: Array.isArray(raw.unlocked) ? raw.unlocked : [] };
     }
     // Migrate the legacy flat `{ gameId: LockedAnalysis }` shape.
-    return { locks: (raw ?? {}) as Record<string, LockedAnalysis>, unlocked: [] };
-  } catch {
-    return { locks: {}, unlocked: [] };
+    if (raw && typeof raw === 'object' && !Array.isArray(raw))
+      return { locks: raw as Record<string, LockedAnalysis>, unlocked: [] };
+    throw new Error('Invalid pick-lock store: expected a JSON object.');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      return { locks: {}, unlocked: [] };
+    throw error;
   }
 }
 
 async function writeLocks(store: LockStore): Promise<void> {
-  await fs.mkdir(STORE_DIR, { recursive: true });
-  await fs.writeFile(STORE_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  await writeJsonAtomically(STORE_FILE, store);
 }
 
 function snapshot(analysis: GameAnalysis): LockedAnalysis['picks'] {
@@ -140,27 +148,29 @@ export async function analyzeGamesWithLocks(
           games.map((game) => analyzeGame(game, ratings)),
         )
       : games.map((game) => analyzeGame(game, ratings));
-  const store = await readLocks();
-  let changed = false;
+  return serializeStoreUpdate(STORE_FILE, async () => {
+    const store = await readLocks();
+    let changed = false;
 
-  const analyses = fresh.map((analysis) => {
-    const existing = store.locks[analysis.game.id];
-    if (existing) {
-      // IMMUTABLE LOCK RULE: never mutate a stored snapshot from fresh analysis.
-      // Render exactly what was frozen at lock time.
-      return { ...applySnapshot(analysis, existing.picks), locked: true };
-    }
-    // A hand-unlocked game stays live even past its auto-lock window.
-    if (store.unlocked.includes(analysis.game.id)) return { ...analysis, locked: false };
-    if (!isLockDue(analysis.game, now)) return { ...analysis, locked: false };
+    const analyses = fresh.map((analysis) => {
+      const existing = store.locks[analysis.game.id];
+      if (existing) {
+        // IMMUTABLE LOCK RULE: never mutate a stored snapshot from fresh analysis.
+        // Render exactly what was frozen at lock time.
+        return { ...applySnapshot(analysis, existing.picks), locked: true };
+      }
+      // A hand-unlocked game stays live even past its auto-lock window.
+      if (store.unlocked.includes(analysis.game.id)) return { ...analysis, locked: false };
+      if (!isLockDue(analysis.game, now)) return { ...analysis, locked: false };
 
-    store.locks[analysis.game.id] = { lockedAt: now.toISOString(), picks: snapshot(analysis) };
-    changed = true;
-    return { ...analysis, locked: true };
+      store.locks[analysis.game.id] = { lockedAt: now.toISOString(), picks: snapshot(analysis) };
+      changed = true;
+      return { ...analysis, locked: true };
+    });
+
+    if (changed) await writeLocks(store);
+    return analyses;
   });
-
-  if (changed) await writeLocks(store);
-  return analyses;
 }
 
 /** Re-run the model for a single game so it can be snapshotted on a manual lock. */
@@ -175,29 +185,33 @@ async function analyzeOneGame(gameId: string): Promise<GameAnalysis | undefined>
 
 /** Manually freeze a game's picks now, clearing any prior unlock override. */
 export async function lockGame(gameId: string): Promise<boolean> {
-  const store = await readLocks();
-  store.unlocked = store.unlocked.filter((id) => id !== gameId);
-  if (!store.locks[gameId]) {
-    const analysis = await analyzeOneGame(gameId);
-    if (!analysis) {
-      await writeLocks(store);
-      return false;
+  const analysis = await analyzeOneGame(gameId);
+  return serializeStoreUpdate(STORE_FILE, async () => {
+    const store = await readLocks();
+    store.unlocked = store.unlocked.filter((id) => id !== gameId);
+    if (!store.locks[gameId]) {
+      if (!analysis) {
+        await writeLocks(store);
+        return false;
+      }
+      store.locks[gameId] = {
+        lockedAt: new Date().toISOString(),
+        manual: true,
+        picks: snapshot(analysis),
+      };
     }
-    store.locks[gameId] = {
-      lockedAt: new Date().toISOString(),
-      manual: true,
-      picks: snapshot(analysis),
-    };
-  }
-  await writeLocks(store);
-  return true;
+    await writeLocks(store);
+    return true;
+  });
 }
 
 /** Manually unlock a game so it re-runs on fresh data and skips auto-lock. */
 export async function unlockGame(gameId: string): Promise<boolean> {
-  const store = await readLocks();
-  delete store.locks[gameId];
-  if (!store.unlocked.includes(gameId)) store.unlocked.push(gameId);
-  await writeLocks(store);
-  return true;
+  return serializeStoreUpdate(STORE_FILE, async () => {
+    const store = await readLocks();
+    delete store.locks[gameId];
+    if (!store.unlocked.includes(gameId)) store.unlocked.push(gameId);
+    await writeLocks(store);
+    return true;
+  });
 }

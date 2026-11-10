@@ -85,15 +85,23 @@ export function baseRatings(): Ratings {
  * Effective ratings after applying results from weeks 1..(uptoWeek-1).
  * Cached by Next fetch revalidation on the underlying ESPN calls.
  */
-export function getFormRatings(uptoWeek: number, season = SEASON): Promise<Ratings> {
-  return memo(`form-${season}-${uptoWeek}`, 300_000, () => computeFormRatings(uptoWeek, season));
+export function getFormRatings(
+  uptoWeek: number,
+  season = SEASON,
+  throughCurrentWeek = true,
+): Promise<Ratings> {
+  // Live picks learn from EVERY completed game through the current week (a Thursday
+  // result feeds Sunday's model). The walk-forward backtest passes false to stay
+  // leak-free. fetchEspnResults returns only finals, so an unplayed game can't leak in.
+  const lastWeek = throughCurrentWeek ? uptoWeek : uptoWeek - 1;
+  return memo(`form-${season}-${lastWeek}`, 300_000, () => computeFormRatings(lastWeek, season));
 }
 
-async function computeFormRatings(uptoWeek: number, season: number): Promise<Ratings> {
+async function computeFormRatings(lastWeek: number, season: number): Promise<Ratings> {
   const r = baseRatings();
-  if (uptoWeek <= 1) return r;
+  if (lastWeek < 1) return r;
 
-  const weeks = Array.from({ length: uptoWeek - 1 }, (_, i) => i + 1);
+  const weeks = Array.from({ length: lastWeek }, (_, i) => i + 1);
   const results = await Promise.all(weeks.map((w) => fetchEspnResults(w, season).catch(() => [])));
 
   results.forEach((week, i) => {

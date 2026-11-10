@@ -1,0 +1,205 @@
+name: Hourly model capture
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: hourly-model-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Find previous research archive
+        id: previous
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100,
+            });
+            const branch = context.ref.replace(/^refs\/heads\//, '');
+            const previous = response.data.artifacts
+              .filter(
+                (artifact) =>
+                  artifact.name === 'nfl-model-research-state' &&
+                  !artifact.expired &&
+                  artifact.workflow_run?.id !== context.runId &&
+                  artifact.workflow_run?.head_branch === branch,
+              )
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (previous?.workflow_run?.id) {
+              core.setOutput('run_id', String(previous.workflow_run.id));
+              core.info(`Restoring research state from run ${previous.workflow_run.id}.`);
+            } else {
+              core.info('No previous research archive; starting a new history.');
+            }
+
+      - name: Restore previous research archive
+        if: steps.previous.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: nfl-model-research-state
+          run-id: ${{ steps.previous.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: data
+
+      - name: Decompress and validate restored state
+        if: steps.previous.outputs.run_id != ''
+        run: |
+          set -euo pipefail
+          for name in closing-lines model-picks; do
+            gzip --decompress --stdout "data/store/${name}.json.gz" > "data/store/${name}.json"
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ("closing-lines.json", "model-picks.json"):
+              path = Path("data/store") / name
+              with path.open(encoding="utf-8") as source:
+                  value = json.load(source)
+              if not isinstance(value, dict):
+                  raise SystemExit(f"{path} must contain a JSON object")
+              print(f"Restored {name}: {len(value)} entries")
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Capture markets and live recommendations
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          set -euo pipefail
+          export CRON_SECRET="$(openssl rand -hex 32)"
+          export DISABLE_CLOSING_LINE_SCHEDULER=1
+          node node_modules/next/dist/bin/next start > "$RUNNER_TEMP/nfl-betting-hub.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+
+          status=000
+          for attempt in $(seq 1 45); do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --max-time 2 http://127.0.0.1:3000/api/cron/capture 2>/dev/null || true)
+            if [ "$status" = 405 ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ "$status" != 405 ]; then
+            cat "$RUNNER_TEMP/nfl-betting-hub.log"
+            echo "The local app did not become ready." >&2
+            exit 1
+          fi
+
+          curl --fail --show-error --silent \
+            --request POST \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --max-time 600 \
+            http://127.0.0.1:3000/api/cron/capture \
+            --output "$RUNNER_TEMP/capture-result.json"
+          node - "$RUNNER_TEMP/capture-result.json" <<'NODE'
+          const fs = require('node:fs');
+          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (result.status !== 'captured' || result.betNow?.status !== 'captured') {
+            console.error(JSON.stringify(result));
+            process.exit(1);
+          }
+          console.log(JSON.stringify(result));
+          NODE
+
+          mkdir -p data/research
+          curl --fail --show-error --silent \
+            --max-time 600 \
+            http://127.0.0.1:3000/api/backtest \
+            --output "$RUNNER_TEMP/live-validation.json"
+          node - "$RUNNER_TEMP/live-validation.json" <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (report.error) throw new Error(report.error);
+          fs.appendFileSync('data/research/live-validation.jsonl', `${JSON.stringify(report)}\n`);
+          console.log(JSON.stringify({
+            season: report.season,
+            gamesObserved: report.gamesObserved,
+            gamesGraded: report.gamesGraded,
+            picksGraded: report.picksGraded,
+            picksMissingResults: report.picksMissingResults,
+          }));
+          NODE
+          cat "$RUNNER_TEMP/nfl-betting-hub.log"
+
+      - name: Compress and validate research state
+        run: |
+          set -euo pipefail
+          for name in closing-lines model-picks; do
+            test -f "data/store/${name}.json"
+            gzip --fast --no-name --stdout "data/store/${name}.json" > "data/store/${name}.json.gz"
+            gzip --test "data/store/${name}.json.gz"
+          done
+          test -s data/research/live-validation.jsonl
+
+      - name: Upload rolling research archive
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfl-model-research-state
+          path: |
+            data/store/closing-lines.json.gz
+            data/store/model-picks.json.gz
+            data/research/live-validation.jsonl
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Remove superseded research archives
+        if: steps.upload.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const currentId = Number('${{ steps.upload.outputs.artifact-id }}');
+            if (!Number.isFinite(currentId)) throw new Error('Artifact upload did not return an ID.');
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100,
+            });
+            const branch = context.ref.replace(/^refs\/heads\//, '');
+            const oldArtifacts = response.data.artifacts.filter(
+              (artifact) =>
+                artifact.name === 'nfl-model-research-state' &&
+                artifact.id !== currentId &&
+                artifact.workflow_run?.head_branch === branch,
+            );
+            for (const artifact of oldArtifacts) {
+              await github.rest.actions.deleteArtifact({
+                owner,
+                repo,
+                artifact_id: artifact.id,
+              });
+              core.info(`Deleted superseded artifact ${artifact.id}.`);
+            }

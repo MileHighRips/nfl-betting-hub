@@ -1,16 +1,19 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { Check, Clock, Newspaper } from 'lucide-react';
 import PlaceBetButton from './PlaceBetButton';
 import { useBankroll } from '@/lib/store';
 import { americanToProb } from '@/lib/odds';
+import { fmtMoney, fmtSignedPct } from '@/lib/format';
 import { hoursToKickoff, timingAdvice, untilLabel, type TimingStage } from '@/lib/kickoff';
 import type { NewsItem } from '@/lib/news';
-import type { PickType, PlacedBet } from '@/lib/types';
+import type { PlacedBet } from '@/lib/types';
 import type { Disconnect } from '@/lib/disconnect';
 import { classifyBet, type BetTierKey } from '@/lib/bet-tier';
+import type { HandicapReview, HandicapReviewDraft } from '@/lib/handicap-review-schema';
+import HandicapReviewGate from './HandicapReviewGate';
 
 export interface BetNowRow {
   key: string;
@@ -23,9 +26,20 @@ export interface BetNowRow {
   stakeUnits: number;
   edge: number;
   confidence: number;
+  marketProb?: number;
+  decisionProb?: number;
+  evPercent?: number;
+  valuePercent?: number;
   gameId: string;
+  modelProb?: number;
+  modelVersion?: string;
+  betDollars?: number;
+  netEv?: number;
+  book?: 'DraftKings' | 'FanDuel' | 'Consensus' | 'Kalshi' | 'Model';
+  opposingPrice?: number;
   side?: string;
   line?: number;
+  alternateLine?: boolean;
   player?: string;
   propMarket?: string;
   situational?: string;
@@ -35,7 +49,18 @@ export interface BetNowRow {
   narrative?: boolean;
   floorExempt?: boolean;
   longshot?: boolean;
-  move?: { open: number; now: number; moved: number; state: 'stale' | 'steam' | 'toward' | 'away' | 'flat'; label: string };
+  locked?: boolean;
+  review?: HandicapReview;
+  researchDraft?: HandicapReviewDraft;
+  footballEvidence?: { label: string; detail: string }[];
+  newsSources?: { headline: string; href: string; source?: string }[];
+  move?: {
+    open: number;
+    now: number;
+    moved: number;
+    state: 'stale' | 'steam' | 'toward' | 'away' | 'flat';
+    label: string;
+  };
 }
 
 const MOVE_STYLE: Record<'stale' | 'steam' | 'toward' | 'away' | 'flat', string> = {
@@ -78,13 +103,20 @@ const TIER_ICON: Record<BetTierKey, string> = {
   none: '',
 };
 
-const FILTERS: { key: 'all' | 'mega' | 'awesome' | 'bet-now' | 'strong'; label: string }[] = [
+const FILTERS: {
+  key: 'all' | 'mega' | 'awesome' | 'bet-now' | 'strong' | 'clv';
+  label: string;
+}[] = [
   { key: 'all', label: 'All value' },
+  { key: 'clv', label: '✓ Beating close' },
   { key: 'mega', label: '🏆 Mega' },
   { key: 'awesome', label: '⭐ Awesome+' },
   { key: 'bet-now', label: 'Bet Now' },
   { key: 'strong', label: 'Strong (5%+)' },
 ];
+
+// Line states where we've beaten (or not yet lost) the closing number.
+const BEATS_CLOSE = new Set(['stale', 'toward', 'steam']);
 
 function oddsLabel(price: number): string {
   return price > 0 ? `+${price}` : `${price}`;
@@ -98,11 +130,21 @@ export default function BetNowBoard({
   season: number;
   news?: NewsItem[];
 }) {
-  const [filter, setFilter] = useState<'all' | 'mega' | 'awesome' | 'bet-now' | 'strong'>('all');
+  const [filter, setFilter] = useState<'all' | 'mega' | 'awesome' | 'bet-now' | 'strong' | 'clv'>(
+    'all',
+  );
   // Default to a clean board each day: only unplaced (New) and re-bet picks show;
   // fully-placed picks drop off automatically (bankroll store knows what's down).
   const [hidePlaced, setHidePlaced] = useState(true);
-  const { bets } = useBankroll();
+  const [clockNow, setClockNow] = useState<number | null>(null);
+  const { bets, unitSize } = useBankroll();
+
+  useEffect(() => {
+    const updateClock = () => setClockNow(Date.now());
+    updateClock();
+    const interval = window.setInterval(updateClock, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   // Beat-writer chatter for a specific player's prop — so you can apply the
   // human read (usage, snaps, coach-speak) the way a well-sourced tout does.
@@ -146,46 +188,48 @@ export default function BetNowBoard({
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bets]);
-  const matchPlaced = (r: BetNowRow) => placedByKey.get(identity(r)) ?? placedByKey.get(r.description);
+  const matchPlaced = (r: BetNowRow) =>
+    placedByKey.get(identity(r)) ?? placedByKey.get(r.description);
 
-  // Total units ALREADY committed to each pick identity and to each game, summed
-  // across every re-bet — so a re-offer tops up toward the model target instead
-  // of telling you to stake the whole amount again on money you already have down.
+  // Total dollars ALREADY committed to each pick identity and game. Placed bets
+  // store configurable units, while Bet Now recommendations use fixed dollar sizes.
   const placedStakeByKey = useMemo(() => {
     const m = new Map<string, number>();
-    const add = (k: string | undefined, u: number) => {
-      if (k) m.set(k, (m.get(k) ?? 0) + u);
+    const add = (k: string | undefined, dollars: number) => {
+      if (k) m.set(k, (m.get(k) ?? 0) + dollars);
     };
     for (const b of bets) {
       const k = identity(b);
-      add(k, b.stakeUnits ?? 0);
-      if (b.description && b.description !== k) add(b.description, b.stakeUnits ?? 0);
+      const dollars = (b.stakeUnits ?? 0) * (b.unitSize ?? unitSize);
+      add(k, dollars);
+      if (b.description && b.description !== k) add(b.description, dollars);
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bets]);
+  }, [bets, unitSize]);
   const placedStakeByGame = useMemo(() => {
     const m = new Map<string, number>();
     for (const b of bets) {
-      if (b.gameId) m.set(b.gameId, (m.get(b.gameId) ?? 0) + (b.stakeUnits ?? 0));
+      if (b.gameId) {
+        const dollars = (b.stakeUnits ?? 0) * (b.unitSize ?? unitSize);
+        m.set(b.gameId, (m.get(b.gameId) ?? 0) + dollars);
+      }
     }
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bets]);
+  }, [bets, unitSize]);
 
   // Re-offer a placed bet ONLY when there's genuine new value on top: a material
   // line move, or a meaningfully bigger recommended stake.
-  const reofferReason = (r: BetNowRow, b: PlacedBet): string | null => {
-    if (r.stakeUnits >= (b.stakeUnits ?? 0) + 0.5) return 'stake ↑';
+  const reofferReason = (r: BetNowRow, b: PlacedBet, onPick: number): string | null => {
+    const targetDollars = r.betDollars ?? r.stakeUnits * 10;
+    if (targetDollars >= onPick + 5) return 'stake ↑';
     const line = r.line;
     const bLine = b.line;
     if (line != null && bLine != null && ['Spread', 'Total', 'Upset'].includes(r.pickType)) {
       if (Math.abs(line - bLine) >= 1.5) return 'line moved';
     } else if (line != null && bLine != null && r.pickType === 'Prop') {
       if (Math.abs(line - bLine) >= Math.max(0.5, 0.08 * Math.abs(bLine))) return 'line moved';
-    } else if (
-      Math.abs(americanToProb(r.price) - americanToProb(b.price ?? r.price)) >= 0.03
-    ) {
+    } else if (Math.abs(americanToProb(r.price) - americanToProb(b.price ?? r.price)) >= 0.03) {
       return 'price moved';
     }
     return null;
@@ -194,22 +238,21 @@ export default function BetNowBoard({
   const enriched = useMemo(
     () =>
       rows.map((r) => {
-        const hrs = hoursToKickoff(r.kickoff);
+        const hrs = clockNow === null ? null : hoursToKickoff(r.kickoff, new Date(clockNow));
         const pb = matchPlaced(r);
         // How much is already on this exact pick / on the whole game.
         const onPick =
           placedStakeByKey.get(identity(r)) ?? placedStakeByKey.get(r.description) ?? 0;
         const onGame = r.gameId ? (placedStakeByGame.get(r.gameId) ?? 0) : 0;
-        // Units still needed to reach the model's target stake for this pick.
-        const remaining = Math.round(Math.max(0, r.stakeUnits - onPick) * 10) / 10;
-        // Re-offer only when there's a real reason AND meaningful stake left to add;
-        // once you're at the target we stop suggesting the same pick.
-        const reoffer = pb && remaining >= 0.5 ? (reofferReason(r, pb) ?? 'top up') : null;
+        // Dollars still needed to reach the Bet Now target, independent of unit size.
+        const targetDollars = r.betDollars ?? r.stakeUnits * 10;
+        const remaining = Math.round(Math.max(0, targetDollars - onPick) * 100) / 100;
+        const reoffer = pb && remaining >= 5 ? (reofferReason(r, pb, onPick) ?? 'top up') : null;
         // "Placed" only when there's no new value to add; a re-offer is actionable.
         return {
           row: r,
           hrs,
-          advice: timingAdvice(r.edge, hrs),
+          advice: timingAdvice(r.edge, hrs ?? 24),
           placed: !!pb && !reoffer,
           reoffer,
           onPick,
@@ -219,7 +262,7 @@ export default function BetNowBoard({
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, placedByKey, placedStakeByKey, placedStakeByGame],
+    [rows, placedByKey, placedStakeByKey, placedStakeByGame, clockNow],
   );
 
   const placedCount = enriched.filter((e) => e.placed).length;
@@ -228,6 +271,8 @@ export default function BetNowBoard({
     if (hidePlaced && placed) return false;
     if (filter === 'bet-now') return advice.stage === 'bet-now';
     if (filter === 'strong') return row.edge >= 0.05;
+    // Only picks whose line still beats (or hasn't lost) the close — true +CLV spots.
+    if (filter === 'clv') return !!row.move && BEATS_CLOSE.has(row.move.state);
     if (filter === 'mega' || filter === 'awesome') {
       const t = classifyBet({
         edge: row.edge,
@@ -285,9 +330,7 @@ export default function BetNowBoard({
             onClick={() => setHidePlaced((v) => !v)}
             className={clsx(
               'ml-auto rounded-lg px-3 py-1.5 text-xs font-semibold transition',
-              hidePlaced
-                ? 'bg-emerald-500/15 text-emerald-300'
-                : 'text-zinc-400 hover:text-white',
+              hidePlaced ? 'bg-emerald-500/15 text-emerald-300' : 'text-zinc-400 hover:text-white',
             )}
           >
             {hidePlaced ? `Show placed (${placedCount})` : `Hide placed (${placedCount})`}
@@ -326,179 +369,296 @@ export default function BetNowBoard({
                   <span className="text-xs font-semibold text-zinc-200">{gm.matchup}</span>
                   <span className="text-[10px] text-zinc-500">
                     {gm.items.length} bet{gm.items.length > 1 ? 's' : ''} ·{' '}
-                    {gm.items.reduce((s, i) => s + i.row.stakeUnits, 0).toFixed(1)}u
+                    {fmtMoney(
+                      gm.items.reduce((s, i) => s + (i.row.betDollars ?? i.row.stakeUnits * 10), 0),
+                    )}
                   </span>
                   {(gm.items[0]?.onGame ?? 0) > 0 && (
                     <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
-                      {gm.items[0].onGame.toFixed(1)}u already on this game
+                      {fmtMoney(gm.items[0].onGame)} already on this game
                     </span>
                   )}
                 </div>
                 <div className="space-y-2">
-                  {gm.items.map(({ row, hrs, advice, placed, reoffer, onPick, remaining, isNew }) => (
-          <div
-            key={row.key}
-            className={clsx(
-              'flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center',
-              placed
-                ? 'border-emerald-500/25 bg-emerald-500/5 opacity-70'
-                : 'border-[var(--color-border)] bg-[var(--color-surface)]',
-            )}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] tracking-widest text-zinc-500 uppercase">
-                  {row.pickType}
-                </span>
-                {(() => {
-                  const t = classifyBet({
-                    edge: row.edge,
-                    disconnect: row.disconnect,
-                    hasSignal: !!row.signal,
-                    narrative: row.narrative,
-                  });
-                  return t.key !== 'none' && t.count >= 1 ? (
-                    <span
-                      className={clsx(
-                        'rounded-md border px-1.5 py-0.5 text-[10px] font-bold',
-                        TIER_STYLE[t.key],
-                      )}
-                      title={`EV:${t.ev ? '✓' : '–'} News:${t.news ? '✓' : '–'} Narrative:${t.narrative ? '✓' : '–'}`}
-                    >
-                      {TIER_ICON[t.key]}
-                      {t.label}
-                    </span>
-                  ) : null;
-                })()}
-                {isNew && (
-                  <span className="rounded-md border border-sky-500/50 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
-                    New
-                  </span>
-                )}
-                {row.longshot && (
-                  <span className="rounded-md border border-fuchsia-500/50 bg-fuchsia-500/10 px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-300">
-                    🎟️ Longshot
-                  </span>
-                )}
-                <span className="text-[10px] text-zinc-500">{row.matchup}</span>
-                {row.edge > 0 && (
-                  <span className="text-[10px] font-semibold text-emerald-400">
-                    +{(row.edge * 100).toFixed(1)}% edge
-                  </span>
-                )}
-              </div>
-              <div className="mt-0.5 truncate text-sm font-semibold text-white">
-                {row.description.replace(` (${row.matchup})`, '')}
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span
-                  className={clsx(
-                    'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
-                    STAGE_STYLE[advice.stage],
+                  {gm.items.map(
+                    ({ row, hrs, advice, placed, reoffer, onPick, remaining, isNew }) => (
+                      <div
+                        key={row.key}
+                        className={clsx(
+                          'flex flex-col gap-2 rounded-xl border p-3',
+                          placed
+                            ? 'border-emerald-500/25 bg-emerald-500/5 opacity-70'
+                            : 'border-[var(--color-border)] bg-[var(--color-surface)]',
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] tracking-widest text-zinc-500 uppercase">
+                              {row.pickType}
+                            </span>
+                            {(() => {
+                              const t = classifyBet({
+                                edge: row.edge,
+                                disconnect: row.disconnect,
+                                hasSignal: !!row.signal,
+                                narrative: row.narrative,
+                              });
+                              return t.key !== 'none' && t.count >= 1 ? (
+                                <span
+                                  className={clsx(
+                                    'rounded-md border px-1.5 py-0.5 text-[10px] font-bold',
+                                    TIER_STYLE[t.key],
+                                  )}
+                                  title={`EV:${t.ev ? '✓' : '–'} News:${t.news ? '✓' : '–'} Narrative:${t.narrative ? '✓' : '–'}`}
+                                >
+                                  {TIER_ICON[t.key]}
+                                  {t.label}
+                                </span>
+                              ) : null;
+                            })()}
+                            {isNew && (
+                              <span className="rounded-md border border-sky-500/50 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
+                                New
+                              </span>
+                            )}
+                            {row.longshot && (
+                              <span className="rounded-md border border-fuchsia-500/50 bg-fuchsia-500/10 px-1.5 py-0.5 text-[10px] font-bold text-fuchsia-300">
+                                🎟️ Longshot
+                              </span>
+                            )}
+                            <span className="text-[10px] text-zinc-500">{row.matchup}</span>
+                            <span
+                              className={clsx(
+                                'text-[10px] font-semibold',
+                                row.edge >= 0 ? 'text-emerald-400' : 'text-red-400',
+                              )}
+                            >
+                              Edge {fmtSignedPct(row.edge)}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 truncate text-sm font-semibold text-white">
+                            {row.description.replace(` (${row.matchup})`, '')}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span
+                              className={clsx(
+                                'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                                STAGE_STYLE[advice.stage],
+                              )}
+                            >
+                              {advice.label}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] text-zinc-500">
+                              <Clock size={11} /> in {hrs === null ? '—' : untilLabel(hrs)}
+                            </span>
+                            {row.situational && (
+                              <span className="rounded-md border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300">
+                                {row.situational}
+                              </span>
+                            )}
+                            {row.disconnect && row.disconnect.tier !== 'fair' && (
+                              <span
+                                className={clsx(
+                                  'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                                  DISCONNECT_STYLE[row.disconnect.tier],
+                                )}
+                                title="Market disconnect — how far our number is from the price"
+                              >
+                                {row.disconnect.tier === 'strong' ? '🔥 ' : ''}
+                                {row.disconnect.label}
+                              </span>
+                            )}
+                            {row.signal && (
+                              <span
+                                className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"
+                                title="Structured beat-writer/role signal feeding the model"
+                              >
+                                📰 {row.signal}
+                              </span>
+                            )}
+                            {row.move && (
+                              <span
+                                className={clsx(
+                                  'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
+                                  MOVE_STYLE[row.move.state],
+                                )}
+                                title={`Opened ${row.move.open}, now ${row.move.now}`}
+                              >
+                                {row.move.state === 'stale' ? '⚡ ' : ''}
+                                {row.move.state === 'steam' ? '🔥 ' : ''}
+                                {row.move.state === 'toward' ? '✓ ' : ''}
+                                {row.move.state === 'away' ? '⚠ ' : ''}
+                                {row.move.label}
+                              </span>
+                            )}
+                            <span className="hidden text-[10px] text-zinc-500 sm:inline">
+                              {advice.detail}
+                            </span>
+                            {reoffer && onPick > 0 && (
+                              <span className="text-[10px] text-zinc-500">
+                                {fmtMoney(onPick)} on this → +{fmtMoney(remaining)} to{' '}
+                                {fmtMoney(row.betDollars ?? row.stakeUnits * 10)} target
+                              </span>
+                            )}
+                          </div>
+                          {(() => {
+                            const pn = playerNews(row.player);
+                            return pn ? (
+                              <a
+                                href={pn.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-1 flex items-start gap-1 text-[10px] text-cyan-400/80 hover:text-cyan-300"
+                              >
+                                <Newspaper size={11} className="mt-0.5 shrink-0" />
+                                <span className="truncate">
+                                  {pn.headline}
+                                  {pn.source ? ` · ${pn.source}` : ''}
+                                </span>
+                              </a>
+                            ) : null;
+                          })()}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {row.evPercent != null && (
+                            <span
+                              className={clsx(
+                                'rounded-md border px-2 py-1 font-mono text-[11px] font-semibold',
+                                row.evPercent >= 0
+                                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                                  : 'border-red-500/40 bg-red-500/10 text-red-300',
+                              )}
+                              title="Model-estimated expected profit per dollar staked, using the listed odds"
+                            >
+                              EV {fmtSignedPct(row.evPercent)}
+                            </span>
+                          )}
+                          <span
+                            className={clsx(
+                              'rounded-md border px-2 py-1 font-mono text-[11px] font-semibold',
+                              row.valuePercent == null
+                                ? 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-zinc-500'
+                                : row.valuePercent >= 0
+                                  ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
+                                  : 'border-red-500/40 bg-red-500/10 text-red-300',
+                            )}
+                            title="Model win probability minus the market-implied probability from the listed odds"
+                          >
+                            Value %{' '}
+                            {row.valuePercent == null ? '—' : fmtSignedPct(row.valuePercent)}
+                          </span>
+                          {row.netEv != null && row.netEv > 0 && (
+                            <span
+                              className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 font-mono text-[11px] font-semibold text-emerald-300"
+                              title="Model-estimated profit after subtracting the $0.50 placement fee"
+                            >
+                              Model EV +${row.netEv.toFixed(2)}
+                            </span>
+                          )}
+                          <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 font-mono text-xs text-zinc-300">
+                            {oddsLabel(row.price)}
+                          </span>
+                          {row.book && (
+                            <span
+                              className={clsx(
+                                'rounded-md border px-2 py-1 text-[10px] font-semibold',
+                                row.book === 'FanDuel'
+                                  ? 'border-sky-500/50 bg-sky-500/10 text-sky-300'
+                                  : row.book === 'DraftKings'
+                                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                                    : 'border-zinc-500/40 bg-zinc-500/10 text-zinc-300',
+                              )}
+                              title={
+                                row.book === 'Model'
+                                  ? 'Model estimate; verify the live price at your sportsbook'
+                                  : 'Price source for this pick'
+                              }
+                            >
+                              {row.book === 'FanDuel'
+                                ? 'FanDuel'
+                                : row.book === 'DraftKings'
+                                  ? 'DK'
+                                  : row.book}
+                            </span>
+                          )}
+                          {placed ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300">
+                              <Check size={14} /> Placed{onPick > 0 ? ` · ${fmtMoney(onPick)}` : ''}
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              {reoffer && (
+                                <span className="rounded-md border border-amber-500/50 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                                  re-bet · {reoffer}
+                                </span>
+                              )}
+                              {(() => {
+                                const placeBetProps = {
+                                  description: row.description,
+                                  market: row.market,
+                                  price: row.price,
+                                  stakeUnits:
+                                    (reoffer
+                                      ? remaining
+                                      : (row.betDollars ?? row.stakeUnits * 10)) / unitSize,
+                                  amountDollars: reoffer ? remaining : row.betDollars,
+                                  confidence: row.confidence,
+                                  edge: row.edge,
+                                  evPercent: row.evPercent,
+                                  valuePercent: row.valuePercent,
+                                  marketProb: row.marketProb,
+                                  modelProb: row.modelProb,
+                                  decisionProb: row.decisionProb,
+                                  modelVersion: row.modelVersion,
+                                  opposingPrice: row.opposingPrice,
+                                  book: row.book,
+                                  kickoff: row.kickoff,
+                                  source: 'model' as const,
+                                  placementSurface: 'bet-now' as const,
+                                  gameId: row.gameId,
+                                  pickType: row.pickType as PlacedBet['pickType'],
+                                  side: row.side,
+                                  line: row.line,
+                                  alternateLine: row.alternateLine,
+                                  player: row.player,
+                                  propMarket: row.propMarket,
+                                };
+                                return row.locked ? (
+                                  <PlaceBetButton {...placeBetProps} />
+                                ) : (
+                                  <HandicapReviewGate
+                                    key={`${row.key}-${row.line ?? ''}-${row.price}-${row.modelProb ?? ''}`}
+                                    snapshot={{
+                                      key: row.key,
+                                      gameId: row.gameId,
+                                      selection: row.description,
+                                      pickType: row.pickType,
+                                      book: row.book,
+                                      line: row.line,
+                                      price: row.price,
+                                      modelProb: row.modelProb,
+                                      marketProb: row.marketProb,
+                                      confidence: row.confidence,
+                                      edge: row.edge,
+                                      evPercent: row.evPercent,
+                                      valuePercent: row.valuePercent,
+                                      betDollars: row.betDollars,
+                                      netEv: row.netEv,
+                                    }}
+                                    initialReview={row.review}
+                                    researchDraft={row.researchDraft}
+                                    evidence={row.footballEvidence ?? []}
+                                    sources={row.newsSources ?? []}
+                                    placeBetProps={placeBetProps}
+                                  />
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ),
                   )}
-                >
-                  {advice.label}
-                </span>
-                <span className="inline-flex items-center gap-1 text-[10px] text-zinc-500">
-                  <Clock size={11} /> in {untilLabel(hrs)}
-                </span>
-                {row.situational && (
-                  <span className="rounded-md border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300">
-                    {row.situational}
-                  </span>
-                )}
-                {row.disconnect && row.disconnect.tier !== 'fair' && (
-                  <span
-                    className={clsx(
-                      'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
-                      DISCONNECT_STYLE[row.disconnect.tier],
-                    )}
-                    title="Market disconnect — how far our number is from the price"
-                  >
-                    {row.disconnect.tier === 'strong' ? '🔥 ' : ''}
-                    {row.disconnect.label}
-                  </span>
-                )}
-                {row.signal && (
-                  <span
-                    className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"
-                    title="Structured beat-writer/role signal feeding the model"
-                  >
-                    📰 {row.signal}
-                  </span>
-                )}
-                {row.move && (
-                  <span
-                    className={clsx(
-                      'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold',
-                      MOVE_STYLE[row.move.state],
-                    )}
-                    title={`Opened ${row.move.open}, now ${row.move.now}`}
-                  >
-                    {row.move.state === 'stale' ? '⚡ ' : ''}
-                    {row.move.state === 'steam' ? '🔥 ' : ''}
-                    {row.move.label}
-                  </span>
-                )}
-                <span className="hidden text-[10px] text-zinc-500 sm:inline">{advice.detail}</span>
-                {reoffer && onPick > 0 && (
-                  <span className="text-[10px] text-zinc-500">
-                    {onPick.toFixed(1)}u on this → +{remaining.toFixed(1)}u to {row.stakeUnits}u target
-                  </span>
-                )}
-              </div>
-              {(() => {
-                const pn = playerNews(row.player);
-                return pn ? (
-                  <a
-                    href={pn.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-1 flex items-start gap-1 text-[10px] text-cyan-400/80 hover:text-cyan-300"
-                  >
-                    <Newspaper size={11} className="mt-0.5 shrink-0" />
-                    <span className="truncate">
-                      {pn.headline}
-                      {pn.source ? ` · ${pn.source}` : ''}
-                    </span>
-                  </a>
-                ) : null;
-              })()}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 font-mono text-xs text-zinc-300">
-                {oddsLabel(row.price)}
-              </span>
-              {placed ? (
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300">
-                  <Check size={14} /> Placed{onPick > 0 ? ` · ${onPick.toFixed(1)}u` : ''}
-                </span>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  {reoffer && (
-                    <span className="rounded-md border border-amber-500/50 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
-                      re-bet · {reoffer}
-                    </span>
-                  )}
-                  <PlaceBetButton
-                    description={row.description}
-                    market={row.market}
-                    price={row.price}
-                    stakeUnits={reoffer ? remaining : row.stakeUnits}
-                    confidence={row.confidence}
-                    source="model"
-                    gameId={row.gameId}
-                    pickType={row.pickType as PickType}
-                    side={row.side}
-                    line={row.line}
-                    player={row.player}
-                    propMarket={row.propMarket}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-                  ))}
                 </div>
               </div>
             ))}

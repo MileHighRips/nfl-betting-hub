@@ -1,6 +1,8 @@
 import { propKey } from './props';
 import { TEAMS } from './teams';
-import type { LivePropMap, TeamAbbr } from './types';
+import { promises as fs } from 'fs';
+import path from 'path';
+import type { LivePropMap, LivePropAltMap, TeamAbbr } from './types';
 import type { PropMarket } from '@/data/props';
 
 /**
@@ -8,11 +10,36 @@ import type { PropMarket } from '@/data/props';
  * sportscontent API. One request per market covers the whole slate. Returns the
  * line lookup AND the real per-team player pool DK is posting, so the model
  * never recommends a player off a stale roster. No-store, so a refresh always
- * pulls the latest numbers. Region path defaults to Virginia (dkusva).
+ * pulls the latest numbers. Region path defaults to Illinois (dkusil).
+ *
+ * DK's WAF intermittently 403s a server IP (rate-limit). To survive those
+ * blocks, every successful pull is cached to disk and replayed (if recent)
+ * when a fetch comes back empty — so props don't blank out during a hiccup.
  */
 
+const CACHE_DIR = path.join(process.cwd(), 'data', 'store');
+const CACHE_MAX_AGE = 6 * 3_600_000; // serve cached props up to 6h old during a block
+
+async function readCache<T>(file: string): Promise<T | null> {
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(CACHE_DIR, file), 'utf-8')) as { at: number; data: T };
+    return Date.now() - raw.at < CACHE_MAX_AGE ? raw.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCache(file: string, data: unknown): Promise<void> {
+  try {
+    await fs.mkdir(CACHE_DIR, { recursive: true });
+    await fs.writeFile(path.join(CACHE_DIR, file), JSON.stringify({ at: Date.now(), data }), 'utf-8');
+  } catch {
+    /* cache is best-effort */
+  }
+}
+
 const DK_BASE = 'https://sportsbook-nash.draftkings.com/api/sportscontent';
-const DK_REGION = process.env.DK_REGION || 'dkusva';
+const DK_REGION = process.env.DK_REGION || 'dkusil'; // Illinois
 const NFL_LEAGUE = '88808';
 
 const NICK_TO_ABBR: Record<string, TeamAbbr> = Object.fromEntries(
@@ -25,12 +52,28 @@ function teamFromLabel(label: string | undefined): TeamAbbr | undefined {
   return NICK_TO_ABBR[tokens[tokens.length - 1]?.toLowerCase()];
 }
 
-// DraftKings category/subcategory → our prop market.
+// DraftKings category/subcategory → our prop market (main Over/Under lines).
 const DK_MARKETS: { cat: string; sub: string; market: PropMarket }[] = [
   { cat: '1000', sub: '9524', market: 'Pass Yards' },
   { cat: '1001', sub: '9514', market: 'Rush Yards' },
   { cat: '1342', sub: '14114', market: 'Receiving Yards' },
   { cat: '1342', sub: '14115', market: 'Receptions' },
+  { cat: '1000', sub: '9525', market: 'Pass TDs' },
+  { cat: '1000', sub: '9517', market: 'Pass Attempts' },
+  { cat: '1000', sub: '9522', market: 'Completions' },
+  { cat: '1001', sub: '9518', market: 'Rush Attempts' },
+  { cat: '1000', sub: '15937', market: 'Interceptions' },
+  { cat: '1342', sub: '9523', market: 'Rush + Rec Yards' },
+];
+
+// Alternate ("N+") ladders. Selections carry the threshold in the label (e.g.
+// "150+"), points is null — a hit means the stat reaches N or more.
+const DK_ALT_MARKETS: { cat: string; sub: string; market: PropMarket }[] = [
+  { cat: '1000', sub: '16569', market: 'Pass Yards' },
+  { cat: '1000', sub: '16568', market: 'Pass TDs' },
+  { cat: '1342', sub: '16570', market: 'Receiving Yards' },
+  { cat: '1001', sub: '16571', market: 'Rush Yards' },
+  { cat: '1342', sub: '16572', market: 'Rush + Rec Yards' },
 ];
 
 interface DkParticipant {
@@ -82,6 +125,42 @@ export interface DkCandidate {
 export interface DkPropsResult {
   lines: LivePropMap;
   byTeam: Partial<Record<TeamAbbr, DkCandidate[]>>;
+  alts: LivePropAltMap;
+}
+
+/** Parse a DK alternate rung label like "150+" or "2+" into its numeric threshold. */
+function parseAltThreshold(label: string | undefined): number | undefined {
+  if (!label) return undefined;
+  const n = Number(label.replace(/[+\s,]/g, '').replace(/\u2212/g, '-'));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Build the alternate ("N+") prop ladders, keyed by `${playerLower}|${market}`. */
+async function fetchDkAltLadders(): Promise<LivePropAltMap> {
+  const alts: LivePropAltMap = {};
+  const results = await Promise.all(
+    DK_ALT_MARKETS.map((m) => fetchSub(m.cat, m.sub).then((d) => ({ m, d }))),
+  );
+  for (const { m, d } of results) {
+    if (!d?.selections) continue;
+    for (const sel of d.selections) {
+      const part = sel.participants?.find((p) => p.type === 'Player') ?? sel.participants?.[0];
+      const player = part?.name;
+      const line = parseAltThreshold(sel.label);
+      const price = parseAmerican(sel.displayOdds?.american);
+      if (!player || line == null || price == null) continue;
+      const key = propKey(player, m.market);
+      (alts[key] ??= []).push({ line, price });
+    }
+  }
+  // Keep each ladder sorted low → high and drop duplicate rungs.
+  for (const key of Object.keys(alts)) {
+    const seen = new Set<number>();
+    alts[key] = alts[key]
+      .filter((r) => (seen.has(r.line) ? false : (seen.add(r.line), true)))
+      .sort((a, b) => a.line - b.line);
+  }
+  return alts;
 }
 
 export async function fetchDraftKingsProps(): Promise<DkPropsResult> {
@@ -89,9 +168,10 @@ export async function fetchDraftKingsProps(): Promise<DkPropsResult> {
   const byTeam: Partial<Record<TeamAbbr, DkCandidate[]>> = {};
   const seen = new Set<string>();
 
-  const results = await Promise.all(
-    DK_MARKETS.map((m) => fetchSub(m.cat, m.sub).then((d) => ({ m, d }))),
-  );
+  const [results, alts] = await Promise.all([
+    Promise.all(DK_MARKETS.map((m) => fetchSub(m.cat, m.sub).then((d) => ({ m, d })))),
+    fetchDkAltLadders(),
+  ]);
 
   for (const { m, d } of results) {
     if (!d?.selections) continue;
@@ -153,7 +233,15 @@ export async function fetchDraftKingsProps(): Promise<DkPropsResult> {
     }
   }
 
-  return { lines, byTeam };
+  // Good pull → refresh the cache. Blocked/empty pull → replay the last good one
+  // (if recent) so props survive a transient DK 403 instead of vanishing.
+  if (Object.keys(lines).length > 0) {
+    const result = { lines, byTeam, alts };
+    await writeCache('dk-props-cache.json', result);
+    return result;
+  }
+  const cached = await readCache<DkPropsResult>('dk-props-cache.json');
+  return cached ?? { lines, byTeam, alts };
 }
 
 export interface DkAtd {
@@ -166,7 +254,7 @@ export interface DkAtd {
 export async function fetchDraftKingsAnytimeTDs(): Promise<Partial<Record<TeamAbbr, DkAtd[]>>> {
   const byTeam: Partial<Record<TeamAbbr, DkAtd[]>> = {};
   const d = await fetchSub('1003', '12438');
-  if (!d?.selections) return byTeam;
+  if (!d?.selections) return (await readCache<Partial<Record<TeamAbbr, DkAtd[]>>>('dk-atd-cache.json')) ?? byTeam;
 
   const eventTeams = new Map<string, { home?: TeamAbbr; away?: TeamAbbr }>();
   for (const ev of d.events ?? []) {
@@ -201,5 +289,7 @@ export async function fetchDraftKingsAnytimeTDs(): Promise<Partial<Record<TeamAb
     seen.add(key);
     (byTeam[team] ??= []).push({ player, team, price });
   }
+  // Good pull refreshes the cache; a later block replays it (see fetchDraftKingsProps).
+  if (Object.keys(byTeam).length > 0) await writeCache('dk-atd-cache.json', byTeam);
   return byTeam;
 }

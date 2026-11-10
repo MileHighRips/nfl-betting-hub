@@ -1,7 +1,6 @@
 import { BrainCircuit, Database } from 'lucide-react';
 import { SectionTitle, Chip } from '@/components/atoms';
 import { SIM_CONFIG } from '@/lib/simulation';
-import { MODEL_WEIGHT } from '@/lib/model';
 
 export const metadata = { title: 'The Model · LockyLines' };
 
@@ -63,7 +62,7 @@ const FACTORS = [
   ],
   [
     'Market Blend',
-    `${Math.round(MODEL_WEIGHT * 100)}% model / ${Math.round((1 - MODEL_WEIGHT) * 100)}% vig-free market when sizing stakes.`,
+    '20–25% model / 75–80% vig-free market until live picks establish model calibration.',
   ],
 ];
 
@@ -75,11 +74,15 @@ const DATA_PROXIES: [string, string][] = [
   ['Live Scores & Status', 'In-game scores and final results power grading and the form model.'],
   [
     'Injuries',
-    'Starter-QB availability drops expected points; ruled-out players are dropped from props.',
+    'ESPN position/status/timestamp reports are captured for validation; players listed Out, IR, Suspended or Doubtful are excluded from props and the live starter-QB flag is modeled. Unvalidated positional impact is not assumed.',
+  ],
+  [
+    'Timestamped Market History',
+    'Pre-kickoff sportsbook spread, total, moneyline and available prop quotes are appended when prices/lines change. Collection starts with this release and is not backfilled.',
   ],
   [
     'Live Weather (Open-Meteo)',
-    'Hourly wind, precip & temperature at each outdoor stadium at kickoff — real wind suppresses passing, kicking and the total.',
+    'Hourly wind, direction, precipitation and temperature at outdoor stadiums are timestamped. Existing wind/weather effects remain active; wind direction is captured for validation, not assigned an untested field-orientation effect.',
   ],
   [
     'Rest & Bye',
@@ -92,6 +95,25 @@ const DATA_PROXIES: [string, string][] = [
   [
     'FanDuel (optional)',
     'Add a free Odds-API key to line-shop FanDuel and pull exact posted prop lines.',
+  ],
+];
+
+const NOT_CONNECTED: [string, string][] = [
+  [
+    'Player tracking & assignments',
+    'Official Next Gen Stats tracking and verified CB-WR / blocker-defender assignments are not connected to live picks.',
+  ],
+  [
+    'Practice & depth-chart trends',
+    'Structured practice participation, snap trends and depth-chart movement are not available in the connected feeds.',
+  ],
+  [
+    'Officials & external market feeds',
+    'Referee assignments and Action Network, Unabated, Kalshi or Polymarket feeds are not integrated.',
+  ],
+  [
+    'Offline play-by-play experiments',
+    'nflverse/PBP and scheme experiments remain research-only; prior walk-forward results did not justify adding them to live probabilities.',
   ],
 ];
 
@@ -118,9 +140,10 @@ export default function MethodologyPage() {
           Over/Under value shows up when our efficiency-and-pace view disagrees with the book.
           Spread (push-aware on key numbers), moneyline, total and team totals are all read off the
           same simulated distribution. Edge is{' '}
-          <span className="text-emerald-400">model probability − market probability</span>; stakes
-          blend {Math.round(MODEL_WEIGHT * 100)}% model with the vig-free price and are sized with
-          fractional Kelly, hard-capped at 1 unit.
+          <span className="text-emerald-400">model probability − market probability</span>. Until
+          archived live results establish calibration, estimates are blended with the vig-free
+          market using a 25–40% model weight depending on market, and one-eighth Kelly, capped at
+          0.5 units.
         </p>
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           {FACTORS.map(([label, detail]) => (
@@ -142,10 +165,12 @@ export default function MethodologyPage() {
       </section>
 
       <section className="card p-6">
-        <h3 className="text-base font-bold text-white">Live data proxies (free, no key)</h3>
+        <h3 className="text-base font-bold text-white">
+          Connected live data and validation capture
+        </h3>
         <p className="mt-2 text-sm text-zinc-400">
-          The engine is fed by public data scraped in real time — no paid feeds required. Each layer
-          sharpens the ratings the simulation runs on.
+          Bet Now uses the live inputs listed here. Some fields are captured only for prospective
+          validation; they are not automatically treated as proven model edges.
         </p>
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           {DATA_PROXIES.map(([label, detail]) => (
@@ -157,6 +182,25 @@ export default function MethodologyPage() {
                 <Database size={14} className="text-emerald-400" />
                 {label}
               </div>
+              <div className="mt-0.5 text-xs text-zinc-500">{detail}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card p-6">
+        <h3 className="text-base font-bold text-white">Not connected to live picks</h3>
+        <p className="mt-2 text-sm text-zinc-400">
+          These sources or granular data are not currently available in the live pipeline. The model
+          does not infer player assignments or fabricate missing inputs.
+        </p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {NOT_CONNECTED.map(([label, detail]) => (
+            <div
+              key={label}
+              className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
+            >
+              <div className="text-sm font-semibold text-white">{label}</div>
               <div className="mt-0.5 text-xs text-zinc-500">{detail}</div>
             </div>
           ))}
@@ -195,10 +239,9 @@ export default function MethodologyPage() {
       <section className="card p-6">
         <h3 className="text-base font-bold text-white">Staking &amp; bankroll</h3>
         <p className="mt-2 text-sm text-zinc-400">
-          One unit starts at $10 (configurable on the Tracker). Recommended stakes come from
-          fractional Kelly on the model edge, so bigger, more confident edges get more units — but
-          never more than 1 unit on a single play. Track results on the Tracker and the hub keeps a
-          live record and ROI.
+          One unit starts at $10 (configurable on the Tracker). Bet Now recommends at most one $5
+          pick per game while the live model is being validated. This is a risk limit, not a promise
+          of profit; use the live-pick scoreboard and closing-line value before increasing stakes.
         </p>
       </section>
 

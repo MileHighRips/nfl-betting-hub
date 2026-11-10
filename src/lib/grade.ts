@@ -1,7 +1,7 @@
 import { fetchEspnResults, type CompletedResult } from './espn';
 import { SEASON } from './schedule';
 import { TEAMS } from './teams';
-import { findStat } from './names';
+import { playerPropValue } from './player-prop-grade';
 import type { PickType, PlacedBet, TeamAbbr } from './types';
 
 function inferMetadata(bet: PlacedBet): PlacedBet {
@@ -71,9 +71,7 @@ function gameWeek(gameId: string): number | null {
 function resultFor(bet: PlacedBet, results: CompletedResult[]): CompletedResult | undefined {
   const teams = bet.gameId ? gameTeams(bet.gameId) : null;
   if (!teams) return undefined;
-  return results.find(
-    (result) => result.away === teams.away && result.home === teams.home,
-  );
+  return results.find((result) => result.away === teams.away && result.home === teams.home);
 }
 
 function settle(bet: PlacedBet, result: CompletedResult): PlacedBet['status'] | undefined {
@@ -84,16 +82,9 @@ function settle(bet: PlacedBet, result: CompletedResult): PlacedBet['status'] | 
     const player = bet.player;
     const market = bet.propMarket?.toLowerCase();
     if (!player || !market) return undefined;
-    const stat = findStat(result.playerStats, player);
-    if (!stat) return undefined;
-    const value = market.includes('pass')
-      ? stat.passYards
-      : market.includes('rush')
-        ? stat.rushYards
-        : market.includes('reception') && !market.includes('yard')
-          ? stat.receptions
-          : stat.receivingYards;
+    const value = playerPropValue(result.playerStats, player, market);
     if (value == null) return undefined;
+    if (bet.alternateLine && bet.side === 'over') return value >= bet.line ? 'won' : 'lost';
     const margin = value - bet.line;
     if (margin === 0) return 'push';
     return (bet.side === 'over' ? margin > 0 : margin < 0) ? 'won' : 'lost';
@@ -105,7 +96,7 @@ function settle(bet: PlacedBet, result: CompletedResult): PlacedBet['status'] | 
     return (bet.side === 'home_ml') === homeWin ? 'won' : 'lost';
   }
 
-  if (bet.pickType === 'Total') {
+  if (bet.pickType === 'Total' || bet.pickType === 'Alt Total') {
     if (bet.line == null) return undefined;
     const margin = result.homeScore + result.awayScore - bet.line;
     if (margin === 0) return 'push';
@@ -134,7 +125,8 @@ export async function gradePendingBets(bets: PlacedBet[]): Promise<PlacedBet[]> 
     [...weeks].map(async (week) => {
       try {
         return await fetchEspnResults(week);
-      } catch {
+      } catch (error) {
+        console.error(`[bet-tracker] Failed to load ESPN results for Week ${week}.`, error);
         return [];
       }
     }),

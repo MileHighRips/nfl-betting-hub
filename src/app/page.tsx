@@ -6,6 +6,7 @@ import { FUTURES } from '@/data/futures';
 import { SEASON } from '@/lib/schedule';
 import { getActiveWeek } from '@/lib/active-week';
 import { getFormRatings } from '@/lib/form';
+import { opposingPriceForPick } from '@/lib/market-quote';
 import { Chip, ConfidenceBar, OddsBadge, SectionTitle } from '@/components/atoms';
 import PlaceBetButton from '@/components/PlaceBetButton';
 import DashboardStats from '@/components/DashboardStats';
@@ -21,14 +22,15 @@ export default async function DashboardPage() {
     getFormRatings(CURRENT_WEEK),
   ]);
   const analyses = await analyzeGamesWithLocks(games, ratings);
+  const pickAnalyses = source === 'live' ? analyses : analyses.filter((analysis) => analysis.locked);
 
-  const topPlays = analyses
+  const topPlays = pickAnalyses
     .map((a) => a.topPick)
     .filter((p) => p.units > 0)
     .sort((x, y) => y.confidence - x.confidence)
     .slice(0, 6);
 
-  const upsets = analyses.filter((a) => a.upset).map((a) => a.upset!);
+  const upsets = pickAnalyses.filter((a) => a.upset).map((a) => a.upset!);
   const kenBets = FUTURES.filter((f) => f.kenPick);
   const bestValue = [...FUTURES].sort((a, b) => b.edge - a.edge).slice(0, 4);
 
@@ -54,9 +56,9 @@ export default async function DashboardPage() {
             Barkley&rsquo;s models.
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-            Live DraftKings lines, a drive-level Monte-Carlo model, every futures market, a value
-            board for out-of-whack prices, and a bankroll tracker so you can watch profit &amp; loss
-            in real time.
+            {source === 'live'
+              ? 'Live DraftKings lines, a drive-level Monte-Carlo model, every futures market, a value board for out-of-whack prices, and a bankroll tracker so you can watch profit & loss in real time.'
+              : 'Live odds are unavailable. New game recommendations are suppressed; only frozen locked picks remain visible until the feed returns.'}
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
             <Link
@@ -84,6 +86,11 @@ export default async function DashboardPage() {
           subtitle="Highest-confidence edges across the slate"
           icon={<TrendingUp size={18} />}
         />
+        {source !== 'live' && (
+          <div className="card mb-3 border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-200">
+            Offline seed lines are not actionable. No new game picks are shown or archived.
+          </div>
+        )}
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {topPlays.map((p) => (
             <div key={p.gameId + p.type} className="card card-hover p-4">
@@ -105,6 +112,13 @@ export default async function DashboardPage() {
                   price={p.price}
                   stakeUnits={Number(p.units.toFixed(2))}
                   confidence={p.confidence}
+                  marketProb={p.marketProb}
+                  opposingPrice={opposingPriceForPick(
+                    analyses.find((a) => a.game.id === p.gameId)?.game,
+                    p,
+                  )}
+                  book={p.book}
+                  kickoff={analyses.find((a) => a.game.id === p.gameId)?.game.kickoff}
                   source="model"
                   gameId={p.gameId}
                   pickType={p.type}
@@ -170,6 +184,7 @@ export default async function DashboardPage() {
                   stakeUnits={Number((f.units || 0.5).toFixed(2))}
                   confidence={f.confidence}
                   source="ken"
+                  book={f.book}
                   compact
                 />
               </div>

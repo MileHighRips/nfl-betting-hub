@@ -40,7 +40,14 @@ export default function NewsWire({ items }: { items: NewsItem[] }) {
                       {TEAMS[t]?.abbr ?? t}
                     </span>
                   ))}
-                  {n.source && <span className="truncate text-zinc-500">· {n.source}</span>}
+                  {n.beatWriter ? (
+                    <span className="truncate font-medium text-cyan-400/80">
+                      via {n.beatWriter}
+                      {n.source ? ` · ${n.source}` : ''}
+                    </span>
+                  ) : (
+                    n.source && <span className="truncate text-zinc-500">· {n.source}</span>
+                  )}
                   <span className="ml-auto shrink-0">{ago(n.published)}</span>
                 </div>
               </div>
