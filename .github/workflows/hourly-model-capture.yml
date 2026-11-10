@@ -15,21 +15,21 @@ concurrency:
 
 jobs:
   capture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
       - name: Find previous research archive
         id: previous
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -57,7 +57,7 @@ jobs:
 
       - name: Restore previous research archive
         if: steps.previous.outputs.run_id != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nfl-model-research-state
           run-id: ${{ steps.previous.outputs.run_id }}
@@ -164,7 +164,7 @@ jobs:
 
       - name: Upload rolling research archive
         id: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nfl-model-research-state
           path: |
@@ -177,7 +177,7 @@ jobs:
 
       - name: Remove superseded research archives
         if: steps.upload.outcome == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
